@@ -1,7 +1,34 @@
 [project]
 name = "cultrue"
 version = "0.1.0"
-description = "Add your description here"
+description = "Cultrue Backend - Multi-party communication platform with AI agents"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "sqlalchemy>=2.0.0",
+    "alembic>=1.13.0",
+    "asyncpg>=0.29.0",
+    "greenlet>=3.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "pyjwt>=2.8.0",
+    "passlib[bcrypt]>=1.7.4",
+    "python-multipart>=0.0.6",
+    "httpx>=0.27.0",
+    "python-dotenv>=1.0.0",
+    "websockets>=12.0",
+    "redis>=5.0.0",
+    "celery>=5.3.0",
+    "apscheduler>=3.10.0",
+    "aioredis>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "httpx>=0.27.0",
+]
