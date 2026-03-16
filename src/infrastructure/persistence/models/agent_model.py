@@ -30,6 +30,8 @@ class AgentModel(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     model_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    api_key_prefix: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    api_key_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True

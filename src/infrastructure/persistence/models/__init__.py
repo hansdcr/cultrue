@@ -4,6 +4,8 @@
 """
 
 from .agent_model import AgentModel
+from .contact_model import ContactModel
+from .participant_model import ParticipantModel
 from .session_model import SessionModel
 from .user_agent_model import UserAgentModel
 from .user_model import UserModel
@@ -11,6 +13,8 @@ from .user_model import UserModel
 __all__ = [
     "UserModel",
     "AgentModel",
+    "ParticipantModel",
+    "ContactModel",
     "SessionModel",
     "UserAgentModel",
 ]
