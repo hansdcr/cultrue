@@ -22,15 +22,15 @@
 - [ ] 创建CreateConversationCommand和Handler
 - [ ] 创建GetConversationQuery和Handler
 - [ ] 创建ListConversationsQuery和Handler
-- [ ] 创建AddParticipantCommand和Handler
-- [ ] 创建RemoveParticipantCommand和Handler
+- [ ] 创建AddMemberCommand和Handler
+- [ ] 创建RemoveMemberCommand和Handler
 - [ ] 创建ArchiveConversationCommand和Handler
 - [ ] 创建ConversationDTO
 
 **交付物**:
 - `src/application/messaging/commands/create_conversation_command.py`
-- `src/application/messaging/commands/add_participant_command.py`
-- `src/application/messaging/commands/remove_participant_command.py`
+- `src/application/messaging/commands/add_member_command.py`
+- `src/application/messaging/commands/remove_member_command.py`
 - `src/application/messaging/commands/archive_conversation_command.py`
 - `src/application/messaging/queries/get_conversation_query.py`
 - `src/application/messaging/queries/list_conversations_query.py`
@@ -38,18 +38,21 @@
 
 **业务逻辑**:
 ```python
+from src.domain.shared.value_objects.actor import Actor
+
 # CreateConversationCommand
+@dataclass
 class CreateConversationCommand:
     conversation_type: str  # 'direct' or 'group'
-    participant_ids: List[UUID]
+    members: List[Actor]    # 使用Actor值对象
     title: Optional[str]
-    creator_id: UUID
+    creator: Actor
 
 # 业务规则
-- Direct会话必须有且仅有2个参与者
-- Group会话至少需要2个参与者
+- Direct会话必须有且仅有2个成员
+- Group会话至少需要2个成员
 - 检查Direct会话是否已存在（避免重复创建）
-- 自动创建Participant记录（如果不存在）
+- 验证所有Actor是否有效（User或Agent存在）
 ```
 
 ### 2. Message应用层
@@ -70,19 +73,21 @@ class CreateConversationCommand:
 
 **业务逻辑**:
 ```python
+from src.domain.shared.value_objects.actor import Actor
+
 # SendMessageCommand
+@dataclass
 class SendMessageCommand:
     conversation_id: UUID
-    sender_id: UUID  # user_id or agent_id
-    sender_type: str  # 'user' or 'agent'
+    sender: Actor           # 使用Actor值对象
     message_type: str
     content: str
     metadata: Optional[dict]
 
 # 业务规则
-- 验证发送者是会话参与者
+- 验证发送者是会话成员
 - 自动更新会话的message_count和last_message_at
-- 自动创建Participant（如果不存在）
+- 验证Actor是否有效
 ```
 
 ### 3. Conversation REST API
@@ -92,8 +97,8 @@ class SendMessageCommand:
 - [ ] 实现POST /api/conversations - 创建会话
 - [ ] 实现GET /api/conversations - 获取会话列表
 - [ ] 实现GET /api/conversations/{conversation_id} - 获取会话详情
-- [ ] 实现POST /api/conversations/{conversation_id}/participants - 添加参与者
-- [ ] 实现DELETE /api/conversations/{conversation_id}/participants/{participant_id} - 移除参与者
+- [ ] 实现POST /api/conversations/{conversation_id}/members - 添加成员
+- [ ] 实现DELETE /api/conversations/{conversation_id}/members - 移除成员
 - [ ] 实现PUT /api/conversations/{conversation_id}/archive - 归档会话
 - [ ] 实现DELETE /api/conversations/{conversation_id} - 删除会话
 
@@ -103,10 +108,24 @@ class SendMessageCommand:
 
 **API设计**:
 ```python
+# ActorSchema（Pydantic模型）
+class ActorSchema(BaseModel):
+    actor_type: str  # 'user' or 'agent'
+    actor_id: UUID
+
+# CreateConversationRequest
+class CreateConversationRequest(BaseModel):
+    conversation_type: str  # 'direct' or 'group'
+    members: List[ActorSchema]
+    title: Optional[str] = None
+
 # POST /api/conversations
 # 请求: {
 #   "conversation_type": "direct",
-#   "participant_ids": ["user_uuid", "agent_uuid"],
+#   "members": [
+#     {"actor_type": "user", "actor_id": "user_uuid"},
+#     {"actor_type": "agent", "actor_id": "agent_uuid"}
+#   ],
 #   "title": "Chat with Hans"  # 可选
 # }
 # 响应: {
@@ -115,7 +134,10 @@ class SendMessageCommand:
 #     "id": "uuid",
 #     "conversation_type": "direct",
 #     "title": "Chat with Hans",
-#     "participants": [...],
+#     "members": [
+#       {"actor_type": "user", "actor_id": "uuid"},
+#       {"actor_type": "agent", "actor_id": "uuid"}
+#     ],
 #     "message_count": 0,
 #     "created_at": "2026-03-16T..."
 #   }
@@ -148,6 +170,22 @@ class SendMessageCommand:
 
 **API设计**:
 ```python
+# SendMessageRequest
+class SendMessageRequest(BaseModel):
+    message_type: str = "text"
+    content: str
+    metadata: Optional[dict] = None
+
+# MessageResponse
+class MessageResponse(BaseModel):
+    id: UUID
+    conversation_id: UUID
+    sender: ActorSchema  # 使用ActorSchema
+    message_type: str
+    content: str
+    metadata: Optional[dict]
+    created_at: datetime
+
 # POST /api/conversations/{conversation_id}/messages
 # 请求: {
 #   "message_type": "text",
@@ -160,9 +198,8 @@ class SendMessageCommand:
 #     "id": "uuid",
 #     "conversation_id": "uuid",
 #     "sender": {
-#       "id": "uuid",
-#       "type": "user",
-#       "display_name": "Alice"
+#       "actor_type": "user",
+#       "actor_id": "uuid"
 #     },
 #     "message_type": "text",
 #     "content": "Hello!",
@@ -195,17 +232,93 @@ class SendMessageCommand:
 **权限规则**:
 ```python
 # 会话权限
-- 只有参与者可以查看会话
-- 只有参与者可以发送消息
-- 只有创建者可以添加/移除参与者（群聊）
-- 只有参与者可以归档/删除会话
+- 只有成员可以查看会话
+- 只有成员可以发送消息
+- 只有创建者可以添加/移除成员（群聊）
+- 只有成员可以归档/删除会话
 
 # 消息权限
 - 只有发送者可以删除消息
-- 只有会话参与者可以查看消息
+- 只有会话成员可以查看消息
+
+# 权限验证示例
+async def verify_conversation_member(
+    conversation_id: UUID,
+    current_actor: Actor,
+    conversation_repo: ConversationRepository
+) -> Conversation:
+    """验证当前Actor是否为会话成员。"""
+    conversation = await conversation_repo.find_by_id(conversation_id)
+    if not conversation:
+        raise NotFoundException("Conversation not found")
+
+    if not conversation.has_member(current_actor):
+        raise ForbiddenException("Not a member of this conversation")
+
+    return conversation
 ```
 
-### 6. 集成到main.py
+### 6. Actor验证服务
+
+**任务**:
+- [ ] 创建ActorValidationService
+- [ ] 实现Actor存在性验证
+- [ ] 实现批量Actor验证
+
+**交付物**:
+- `src/application/messaging/services/actor_validation_service.py`
+
+**实现要点**:
+```python
+class ActorValidationService:
+    """Actor验证服务。"""
+
+    def __init__(
+        self,
+        user_repository: UserRepository,
+        agent_repository: AgentRepository
+    ):
+        self.user_repository = user_repository
+        self.agent_repository = agent_repository
+
+    async def validate_actor(self, actor: Actor) -> bool:
+        """验证Actor是否存在。"""
+        if actor.is_user():
+            user = await self.user_repository.find_by_id(actor.actor_id)
+            return user is not None and user.is_active
+        else:
+            agent = await self.agent_repository.find_by_id(actor.actor_id)
+            return agent is not None and agent.is_active
+
+    async def validate_actors(self, actors: List[Actor]) -> None:
+        """批量验证Actors，如果有无效的则抛出异常。"""
+        for actor in actors:
+            if not await self.validate_actor(actor):
+                raise ValidationException(
+                    f"Invalid actor: {actor.actor_type}:{actor.actor_id}"
+                )
+
+    async def get_actor_display_info(self, actor: Actor) -> dict:
+        """获取Actor的显示信息（名称、头像等）。"""
+        if actor.is_user():
+            user = await self.user_repository.find_by_id(actor.actor_id)
+            return {
+                "actor_type": "user",
+                "actor_id": str(user.id),
+                "display_name": user.full_name or user.username,
+                "avatar_url": user.avatar_url
+            }
+        else:
+            agent = await self.agent_repository.find_by_id(actor.actor_id)
+            return {
+                "actor_type": "agent",
+                "actor_id": str(agent.id),
+                "display_name": agent.name,
+                "avatar_url": agent.avatar
+            }
+```
+
+### 7. 集成到main.py
 
 **任务**:
 - [ ] 注册conversation路由
@@ -215,7 +328,7 @@ class SendMessageCommand:
 **交付物**:
 - 更新 `main.py`
 
-### 7. 测试
+### 8. 测试
 
 **任务**:
 - [ ] 编写应用层单元测试
@@ -232,36 +345,76 @@ class SendMessageCommand:
 **测试场景**:
 ```python
 # 场景1: User创建与Agent的会话并发送消息
-def test_user_agent_conversation():
+async def test_user_agent_conversation(client, auth_headers):
     # 1. 创建会话
-    response = client.post("/api/conversations", json={
+    response = await client.post("/api/conversations", json={
         "conversation_type": "direct",
-        "participant_ids": [user_id, agent_id]
-    })
+        "members": [
+            {"actor_type": "user", "actor_id": str(user_id)},
+            {"actor_type": "agent", "actor_id": str(agent_id)}
+        ]
+    }, headers=auth_headers)
+    assert response.status_code == 201
     conversation_id = response.json()["data"]["id"]
 
     # 2. 发送消息
-    response = client.post(f"/api/conversations/{conversation_id}/messages", json={
-        "content": "Hello Hans!"
-    })
+    response = await client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"content": "Hello Hans!"},
+        headers=auth_headers
+    )
+    assert response.status_code == 201
 
     # 3. 查询消息历史
-    response = client.get(f"/api/conversations/{conversation_id}/messages")
+    response = await client.get(
+        f"/api/conversations/{conversation_id}/messages",
+        headers=auth_headers
+    )
+    assert response.status_code == 200
+    assert len(response.json()["data"]["items"]) == 1
 
 # 场景2: User创建与另一个User的会话
-def test_user_user_conversation():
-    response = client.post("/api/conversations", json={
+async def test_user_user_conversation(client, auth_headers):
+    response = await client.post("/api/conversations", json={
         "conversation_type": "direct",
-        "participant_ids": [user1_id, user2_id]
-    })
+        "members": [
+            {"actor_type": "user", "actor_id": str(user1_id)},
+            {"actor_type": "user", "actor_id": str(user2_id)}
+        ]
+    }, headers=auth_headers)
+    assert response.status_code == 201
 
 # 场景3: 创建群聊
-def test_group_conversation():
-    response = client.post("/api/conversations", json={
+async def test_group_conversation(client, auth_headers):
+    response = await client.post("/api/conversations", json={
         "conversation_type": "group",
-        "participant_ids": [user_id, agent1_id, agent2_id],
+        "members": [
+            {"actor_type": "user", "actor_id": str(user_id)},
+            {"actor_type": "agent", "actor_id": str(agent1_id)},
+            {"actor_type": "agent", "actor_id": str(agent2_id)}
+        ],
         "title": "Study Group"
-    })
+    }, headers=auth_headers)
+    assert response.status_code == 201
+
+# 场景4: 权限测试 - 非成员无法查看会话
+async def test_non_member_cannot_view_conversation(client, auth_headers):
+    # user1创建与agent的会话
+    response = await client.post("/api/conversations", json={
+        "conversation_type": "direct",
+        "members": [
+            {"actor_type": "user", "actor_id": str(user1_id)},
+            {"actor_type": "agent", "actor_id": str(agent_id)}
+        ]
+    }, headers=auth_headers_user1)
+    conversation_id = response.json()["data"]["id"]
+
+    # user2尝试查看会话（应该失败）
+    response = await client.get(
+        f"/api/conversations/{conversation_id}",
+        headers=auth_headers_user2
+    )
+    assert response.status_code == 403
 ```
 
 ## ✅ 验收标准
@@ -271,29 +424,34 @@ def test_group_conversation():
 - [ ] 可以发送和接收消息
 - [ ] 可以查询会话列表（支持分页）
 - [ ] 可以查询消息历史（支持分页）
-- [ ] 可以添加/移除群聊参与者
+- [ ] 可以添加/移除群聊成员
 - [ ] 可以归档/删除会话
+- [ ] Actor验证正确
 - [ ] 权限控制正确
 - [ ] 所有测试通过
 - [ ] API文档完整
+- [ ] 与迭代6、7的Actor模型保持一致
 
 ## 🔧 技术要点
 
-### 1. 自动创建Participant
+### 1. Actor验证
 
-当User或Agent首次参与会话时，自动创建Participant记录：
+由于Actor是值对象，需要在应用层验证其有效性：
 ```python
-async def _ensure_participant(self, user_id: UUID = None, agent_id: UUID = None):
-    if user_id:
-        user = await user_repo.find_by_id(user_id)
-        return await participant_repo.find_or_create_from_user(
-            user_id, user.full_name, user.avatar_url
-        )
-    elif agent_id:
-        agent = await agent_repo.find_by_id(agent_id)
-        return await participant_repo.find_or_create_from_agent(
-            agent_id, agent.name, agent.avatar
-        )
+# 在CreateConversationCommandHandler中
+async def handle(self, command: CreateConversationCommand) -> ConversationDTO:
+    # 验证所有成员是否有效
+    await self.actor_validation_service.validate_actors(command.members)
+
+    # 创建会话
+    conversation = Conversation.create_direct(
+        command.members[0],
+        command.members[1]
+    )
+
+    # 保存
+    saved = await self.conversation_repository.save(conversation)
+    return ConversationDTO.from_entity(saved)
 ```
 
 ### 2. 避免重复创建Direct会话
@@ -301,10 +459,10 @@ async def _ensure_participant(self, user_id: UUID = None, agent_id: UUID = None)
 创建Direct会话前检查是否已存在：
 ```python
 existing = await conversation_repo.find_direct_conversation(
-    participant1_id, participant2_id
+    actor1, actor2
 )
-if existing:
-    return existing
+if existing and existing.status == ConversationStatus.ACTIVE:
+    return ConversationDTO.from_entity(existing)
 ```
 
 ### 3. 消息分页
@@ -326,33 +484,106 @@ messages = await message_repo.find_by_conversation_id_after(
 
 按last_message_at降序排列，最近活跃的会话在前：
 ```python
-conversations = await conversation_repo.find_by_participant_id(
-    participant_id, limit=20, offset=0, order_by="last_message_at DESC"
+conversations = await conversation_repo.find_by_actor(
+    current_actor, limit=20, offset=0
 )
+# 仓储内部实现: ORDER BY last_message_at DESC
 ```
 
 ### 5. 未读消息计数
 
-在conversation_participants表中记录last_read_at：
+在conversation_members表中记录last_read_at：
 ```python
-unread_count = await message_repo.count_unread(
-    conversation_id, participant_id, last_read_at
-)
+# 获取未读消息数
+async def get_unread_count(
+    conversation_id: UUID,
+    actor: Actor
+) -> int:
+    member = await get_conversation_member(conversation_id, actor)
+    if not member or not member.last_read_at:
+        return await count_messages(conversation_id)
+    return await count_messages_after(
+        conversation_id,
+        member.last_read_at
+    )
+```
+
+### 6. 当前用户Actor的获取
+
+从认证中间件注入的user_id创建Actor：
+```python
+# 依赖注入
+async def get_current_actor(
+    request: Request,
+    user_repository: UserRepository = Depends(get_user_repository)
+) -> Actor:
+    """从请求中获取当前用户的Actor。"""
+    user_id = request.state.user_id  # 从认证中间件注入
+    user = await user_repository.find_by_id(user_id)
+    if not user:
+        raise UnauthorizedException("User not found")
+    return Actor.from_user(user_id)
+```
+
+### 7. DTO中的Actor序列化
+
+```python
+@dataclass
+class ActorDTO:
+    actor_type: str
+    actor_id: str
+    display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+@dataclass
+class MessageDTO:
+    id: str
+    conversation_id: str
+    sender: ActorDTO
+    message_type: str
+    content: str
+    metadata: Optional[dict]
+    created_at: str
+
+    @classmethod
+    async def from_entity(
+        cls,
+        message: Message,
+        actor_validation_service: ActorValidationService
+    ) -> "MessageDTO":
+        # 获取发送者的显示信息
+        sender_info = await actor_validation_service.get_actor_display_info(
+            message.sender
+        )
+
+        return cls(
+            id=str(message.id),
+            conversation_id=str(message.conversation_id),
+            sender=ActorDTO(**sender_info),
+            message_type=message.message_type.value,
+            content=message.content,
+            metadata=message.metadata,
+            created_at=message.created_at.isoformat()
+        )
 ```
 
 ## 🔜 下一步
 
-完成迭代8后，进入**迭代9: WebSocket-基础**，实现实时消息推送。
+完成迭代8后，进入**迭代9: WebSocket实时通信**，实现实时消息推送。
 
 ## 📊 预期成果
 
 完成本迭代后，系统将具备：
 - ✅ 完整的会话管理API
 - ✅ 完整的消息管理API
-- ✅ 支持多种通信类型
+- ✅ 支持多种通信类型（User-User, User-Agent, Agent-Agent）
+- ✅ Actor验证机制
 - ✅ 权限控制
 - ✅ 完整的测试覆盖
+- ✅ 与迭代6、7保持架构一致性
 
 ---
 
 **创建日期**: 2026-03-16
+**修订日期**: 2026-03-16
+**修订原因**: 采用Solution C的Actor模型，移除Participant实体依赖
