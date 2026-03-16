@@ -50,7 +50,7 @@ class Contact:
             alias=alias,
             is_favorite=contact_type == ContactType.FAVORITE,
             last_interaction_at=None,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.utcnow(),
         )
 
     def update_alias(self, alias: str) -> None:
@@ -74,7 +74,7 @@ class Contact:
 
     def record_interaction(self) -> None:
         """记录交互时间。"""
-        self.last_interaction_at = datetime.now(timezone.utc)
+        self.last_interaction_at = datetime.utcnow()
 
     def block(self) -> None:
         """屏蔽联系人。"""

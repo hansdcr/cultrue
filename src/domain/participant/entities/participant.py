@@ -38,7 +38,7 @@ class Participant:
                 participant_type=ActorType.USER,
                 user_id=actor.actor_id,
                 agent_id=None,
-                created_at=datetime.now(timezone.utc)
+                created_at=datetime.utcnow()
             )
         else:
             return cls(
@@ -46,7 +46,7 @@ class Participant:
                 participant_type=ActorType.AGENT,
                 user_id=None,
                 agent_id=actor.actor_id,
-                created_at=datetime.now(timezone.utc)
+                created_at=datetime.utcnow()
             )
 
     def to_actor(self) -> Actor:

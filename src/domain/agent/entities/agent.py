@@ -58,7 +58,7 @@ class Agent:
         Returns:
             Agent实例
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.utcnow()
         api_key_hash = bcrypt.hashpw(
             api_key.value.encode(),
             bcrypt.gensalt()
@@ -114,7 +114,7 @@ class Agent:
             new_api_key.value.encode(),
             bcrypt.gensalt()
         ).decode()
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.utcnow()
         return new_api_key
 
     def update_info(
@@ -144,14 +144,14 @@ class Agent:
             self.system_prompt = system_prompt
         if model_config is not None:
             self.model_config = model_config
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.utcnow()
 
     def deactivate(self) -> None:
         """停用Agent。"""
         self.is_active = False
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.utcnow()
 
     def activate(self) -> None:
         """激活Agent。"""
         self.is_active = True
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.utcnow()
