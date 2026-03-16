@@ -1,0 +1,101 @@
+"""FastAPI依赖注入。
+
+提供认证、数据库等依赖。
+"""
+
+from typing import Annotated
+
+from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.infrastructure.persistence.database import get_db
+from src.infrastructure.persistence.models import UserModel
+
+
+async def get_current_user_id(request: Request) -> str:
+    """获取当前用户ID。
+
+    从request.state中获取用户ID（由AuthMiddleware注入）。
+
+    Args:
+        request: FastAPI请求对象
+
+    Returns:
+        用户ID
+
+    Raises:
+        HTTPException: 如果用户未认证
+    """
+    user_id = getattr(request.state, "user_id", None)
+
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return user_id
+
+
+async def get_current_user(
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> UserModel:
+    """获取当前用户。
+
+    从数据库中查询当前用户的完整信息。
+
+    Args:
+        user_id: 用户ID（由get_current_user_id依赖提供）
+        db: 数据库会话（由get_db依赖提供）
+
+    Returns:
+        用户模型对象
+
+    Raises:
+        HTTPException: 如果用户不存在
+    """
+    stmt = select(UserModel).where(UserModel.id == user_id)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    return user
+
+
+async def get_current_active_user(
+    user: Annotated[UserModel, Depends(get_current_user)],
+) -> UserModel:
+    """获取当前活跃用户。
+
+    验证用户是否处于活跃状态。
+
+    Args:
+        user: 用户模型对象（由get_current_user依赖提供）
+
+    Returns:
+        用户模型对象
+
+    Raises:
+        HTTPException: 如果用户未激活
+    """
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is not active",
+        )
+
+    return user
+
+
+# 类型别名，方便在路由中使用
+CurrentUserId = Annotated[str, Depends(get_current_user_id)]
+CurrentUser = Annotated[UserModel, Depends(get_current_user)]
+CurrentActiveUser = Annotated[UserModel, Depends(get_current_active_user)]
