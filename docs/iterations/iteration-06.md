@@ -1,4 +1,4 @@
-# 迭代6: Agent管理（方案C - 多态Actor模型）
+# 迭代6: Agent管理（双层抽象架构）
 
 > 实现Agent信息管理和通用的联系人关系系统
 
@@ -6,7 +6,7 @@
 
 - **迭代编号**: 6
 - **预计时间**: 1-2天
-- **当前状态**: 🟡 计划中
+- **当前状态**: 🟡 设计完成
 - **依赖迭代**: 迭代5 ✅
 - **开始日期**: 待定
 
@@ -16,30 +16,85 @@
 
 ## 💡 设计理念
 
-**方案C：多态Actor模型**
+**双层抽象架构（Actor + Participant）**
 
-- User和Agent保持各自的领域完整性
-- 使用`(actor_type, actor_id)`多态引用实现统一标识
-- 无需Participant中间表，结构简洁
-- 通过`contacts`表统一管理所有类型间的关系
+- **领域层**：使用Actor值对象统一表示User和Agent，保持领域模型简洁
+- **数据库层**：使用Participant中间表，通过外键约束保证数据完整性
+- **仓储层**：自动管理Actor ↔ Participant转换，对应用层透明
+- **优势**：兼顾领域清晰性和数据完整性，无需应用层手动验证
 
 ## 📝 任务清单
 
-### 1. Agent领域层
+### 1. Participant领域层（新增）
+
+**任务**:
+- [ ] 创建Participant实体
+- [ ] 创建ParticipantRepository接口
+
+**交付物**:
+- `src/domain/participant/entities/participant.py`
+- `src/domain/participant/repositories/participant_repository.py`
+
+**设计要点**:
+```python
+# Participant实体（数据库映射层）
+@dataclass
+class Participant:
+    """用于保证数据完整性的中间表实体。
+    应用层使用Actor，仓储层使用Participant。
+    """
+    id: UUID
+    participant_type: ActorType
+    user_id: Optional[UUID]
+    agent_id: Optional[UUID]
+    created_at: datetime
+
+    @classmethod
+    def from_actor(cls, actor: Actor) -> "Participant":
+        """从Actor创建Participant。"""
+        if actor.is_user():
+            return cls(id=uuid4(), participant_type=ActorType.USER,
+                      user_id=actor.actor_id, agent_id=None, ...)
+        else:
+            return cls(id=uuid4(), participant_type=ActorType.AGENT,
+                      user_id=None, agent_id=actor.actor_id, ...)
+
+    def to_actor(self) -> Actor:
+        """转换为Actor。"""
+        if self.participant_type == ActorType.USER:
+            return Actor.from_user(self.user_id)
+        else:
+            return Actor.from_agent(self.agent_id)
+
+# ParticipantRepository接口
+class ParticipantRepository(ABC):
+    @abstractmethod
+    async def find_by_actor(self, actor: Actor) -> Optional[Participant]:
+        pass
+
+    @abstractmethod
+    async def find_or_create(self, actor: Actor) -> Participant:
+        """查找或创建Participant（核心方法）。"""
+        pass
+```
+
+### 2. Agent领域层
 
 **任务**:
 - [ ] 创建AgentId值对象
+- [ ] 创建ApiKey值对象（Agent独立认证）⭐ 新增
 - [ ] 创建AgentConfig值对象（模型配置）
-- [ ] 创建Agent实体
+- [ ] 创建Agent实体（含api_key_hash字段）
 - [ ] 创建AgentRepository接口
 - [ ] 创建Actor值对象（统一User和Agent的标识）
 
 **交付物**:
 - `src/domain/agent/value_objects/agent_id.py`
+- `src/domain/agent/value_objects/api_key.py` ⭐ 新增
 - `src/domain/agent/value_objects/agent_config.py`
 - `src/domain/agent/entities/agent.py`
 - `src/domain/agent/repositories/agent_repository.py`
-- `src/domain/shared/value_objects/actor.py` ⭐ 新增
+- `src/domain/shared/value_objects/actor.py`
 
 **设计要点**:
 ```python
@@ -66,6 +121,27 @@ class Actor:
 
     def is_agent(self) -> bool:
         return self.actor_type == ActorType.AGENT
+
+# ApiKey值对象（Agent独立认证）⭐ 新增
+class ApiKey:
+    """Agent API Key值对象。
+
+    格式: ak_<32-char-random-string>
+    """
+    def __init__(self, value: str):
+        if not value.startswith('ak_'):
+            raise ValueError("API Key must start with 'ak_'")
+        self._value = value
+
+    @classmethod
+    def generate(cls) -> "ApiKey":
+        """生成新的API Key。"""
+        random_str = secrets.token_urlsafe(24)[:32]
+        return cls(f"ak_{random_str}")
+
+    def mask(self) -> str:
+        """返回掩码版本（用于显示）。"""
+        return f"{self._value[:10]}...{self._value[-4:]}"
 
 # AgentId值对象
 class AgentId:
@@ -95,6 +171,7 @@ class Agent:
     description: Optional[str]
     system_prompt: Optional[str]
     model_config: AgentConfig
+    api_key_hash: str  # ⭐ 新增：API Key哈希值
     is_active: bool
     created_by: Optional[UUID]  # 创建者的user_id
     created_at: datetime
@@ -103,6 +180,16 @@ class Agent:
     def to_actor(self) -> Actor:
         """转换为Actor。"""
         return Actor.from_agent(self.id)
+
+    def verify_api_key(self, api_key: ApiKey) -> bool:
+        """验证API Key。"""
+        return bcrypt.checkpw(api_key.value.encode(), self.api_key_hash.encode())
+
+    def regenerate_api_key(self) -> ApiKey:
+        """重新生成API Key。"""
+        new_api_key = ApiKey.generate()
+        self.api_key_hash = bcrypt.hashpw(new_api_key.value.encode(), bcrypt.gensalt()).decode()
+        return new_api_key
 ```
 
 ### 2. Contact领域层（新增）
@@ -165,13 +252,17 @@ class Contact:
 ### 3. Agent应用层
 
 **任务**:
-- [ ] 创建CreateAgentCommand和Handler
+- [ ] 创建RegisterAgentCommand和Handler（Agent注册）⭐ 新增
+- [ ] 创建RegenerateApiKeyCommand和Handler ⭐ 新增
+- [ ] 创建CreateAgentCommand和Handler（管理员创建）
 - [ ] 创建UpdateAgentCommand和Handler
 - [ ] 创建GetAgentQuery和Handler
 - [ ] 创建ListAgentsQuery和Handler
 - [ ] 创建AgentDTO
 
 **交付物**:
+- `src/application/agent/commands/register_agent_command.py` ⭐ 新增
+- `src/application/agent/commands/regenerate_api_key_command.py` ⭐ 新增
 - `src/application/agent/commands/create_agent_command.py`
 - `src/application/agent/commands/update_agent_command.py`
 - `src/application/agent/queries/get_agent_query.py`
@@ -179,10 +270,27 @@ class Contact:
 - `src/application/agent/dtos/agent_dto.py`
 
 **业务逻辑**:
-- 创建Agent时自动生成agent_id（如果未提供）
-- 验证agent_id的唯一性
-- 验证model_config的有效性
-- 支持按agent_id或UUID查询
+```python
+# RegisterAgentCommand（Agent自主注册）
+class RegisterAgentCommandHandler:
+    async def handle(self, command: RegisterAgentCommand):
+        # 1. 生成API Key
+        api_key = ApiKey.generate()
+        api_key_hash = bcrypt.hashpw(api_key.value.encode(), bcrypt.gensalt())
+
+        # 2. 创建Agent
+        agent = Agent(
+            id=uuid4(),
+            agent_id=AgentId(command.agent_id),
+            name=command.name,
+            api_key_hash=api_key_hash.decode(),
+            ...
+        )
+
+        # 3. 保存并返回API Key（仅此一次）
+        saved_agent = await self.agent_repo.save(agent)
+        return RegisterAgentResult(agent=saved_agent, api_key=api_key)
+```
 
 ### 4. Contact应用层（新增）
 
@@ -212,29 +320,60 @@ class AddContactCommand:
     alias: Optional[str]
 
 # 业务规则
-- 验证owner和target都存在
 - 防止重复添加
 - 支持双向关系（可选）
+- 无需手动验证Actor存在性（仓储层自动处理）⭐ 简化
 ```
 
 ### 5. Agent基础设施层
 
 **任务**:
+- [ ] 创建ParticipantModel（SQLAlchemy模型）⭐ 新增
 - [ ] 创建AgentModel（SQLAlchemy模型）
-- [ ] 创建ContactModel（SQLAlchemy模型）⭐ 新增
+- [ ] 创建ContactModel（SQLAlchemy模型）
+- [ ] 创建PostgresParticipantRepository ⭐ 新增
 - [ ] 创建PostgresAgentRepository
-- [ ] 创建PostgresContactRepository ⭐ 新增
+- [ ] 创建PostgresContactRepository（注入participant_repo）
 - [ ] 创建数据库迁移脚本
 
 **交付物**:
+- `src/infrastructure/persistence/models/participant_model.py` ⭐ 新增
 - `src/infrastructure/persistence/models/agent_model.py`
-- `src/infrastructure/persistence/models/contact_model.py` ⭐ 新增
+- `src/infrastructure/persistence/models/contact_model.py`
+- `src/infrastructure/persistence/repositories/postgres_participant_repository.py` ⭐ 新增
 - `src/infrastructure/persistence/repositories/postgres_agent_repository.py`
-- `src/infrastructure/persistence/repositories/postgres_contact_repository.py` ⭐ 新增
-- `migrations/versions/xxx_create_agents_contacts_tables.py`
+- `src/infrastructure/persistence/repositories/postgres_contact_repository.py`
+- `migrations/versions/xxx_create_participants_agents_contacts_tables.py`
 
 **数据库表设计**:
 ```sql
+-- participants表（中间表，保证数据完整性）⭐ 新增
+CREATE TABLE participants (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    participant_type VARCHAR(20) NOT NULL,  -- 'user' or 'agent'
+    user_id UUID,
+    agent_id UUID,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+
+    -- 外键约束
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+
+    -- CHECK约束：确保类型和ID匹配
+    CHECK (
+        (participant_type = 'user' AND user_id IS NOT NULL AND agent_id IS NULL) OR
+        (participant_type = 'agent' AND agent_id IS NOT NULL AND user_id IS NULL)
+    ),
+
+    -- 唯一约束：每个User/Agent只有一个Participant记录
+    UNIQUE(user_id),
+    UNIQUE(agent_id)
+);
+
+CREATE INDEX idx_participants_type ON participants(participant_type);
+CREATE INDEX idx_participants_user_id ON participants(user_id);
+CREATE INDEX idx_participants_agent_id ON participants(agent_id);
+
 -- agents表
 CREATE TABLE agents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -244,54 +383,88 @@ CREATE TABLE agents (
     description TEXT,
     system_prompt TEXT,
     model_config JSONB,
+    api_key_hash VARCHAR(255) NOT NULL,  -- ⭐ 新增：API Key哈希值
     is_active BOOLEAN DEFAULT TRUE,
     created_by UUID REFERENCES users(id),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- contacts表（统一的联系人关系）⭐ 替代user_agents
+CREATE INDEX idx_agents_agent_id ON agents(agent_id);
+CREATE INDEX idx_agents_is_active ON agents(is_active);
+
+-- contacts表（使用外键引用participants）⭐ 修改
 CREATE TABLE contacts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    owner_type VARCHAR(20) NOT NULL,   -- 'user' or 'agent'
-    owner_id UUID NOT NULL,
-    target_type VARCHAR(20) NOT NULL,  -- 'user' or 'agent'
-    target_id UUID NOT NULL,
+    owner_id UUID NOT NULL,      -- ⭐ 引用participants.id
+    target_id UUID NOT NULL,     -- ⭐ 引用participants.id
     contact_type VARCHAR(20) DEFAULT 'friend',
     alias VARCHAR(100),
     is_favorite BOOLEAN DEFAULT FALSE,
     last_interaction_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(owner_type, owner_id, target_type, target_id)
+
+    -- 外键约束
+    FOREIGN KEY (owner_id) REFERENCES participants(id) ON DELETE CASCADE,
+    FOREIGN KEY (target_id) REFERENCES participants(id) ON DELETE CASCADE,
+
+    -- 唯一约束
+    UNIQUE(owner_id, target_id)
 );
 
--- 索引
-CREATE INDEX idx_agents_agent_id ON agents(agent_id);
-CREATE INDEX idx_agents_is_active ON agents(is_active);
-CREATE INDEX idx_contacts_owner ON contacts(owner_type, owner_id);
-CREATE INDEX idx_contacts_target ON contacts(target_type, target_id);
+CREATE INDEX idx_contacts_owner_id ON contacts(owner_id);
+CREATE INDEX idx_contacts_target_id ON contacts(target_id);
 CREATE INDEX idx_contacts_type ON contacts(contact_type);
 ```
 
 **关键设计**:
-- `contacts`表使用多态引用，无外键约束
-- 应用层负责验证owner_id和target_id的有效性
-- 支持所有类型间的关系：User-User、User-Agent、Agent-Agent
+- `participants`表作为中间表，通过外键保证User和Agent的存在性
+- `contacts`表引用`participants.id`，由数据库保证数据完整性
+- 仓储层自动管理Participant的创建和转换，对应用层透明
+- 使用`find_or_create`模式确保Participant存在
 
 ### 6. Agent接口层
 
 **任务**:
 - [ ] 创建AgentSchema（Pydantic模型）
 - [ ] 创建Agent REST API路由
+- [ ] 实现POST /api/agents/register - Agent自主注册 ⭐ 新增
+- [ ] 实现POST /api/agents/{agent_id}/regenerate-key - 重新生成API Key ⭐ 新增
 - [ ] 实现GET /api/agents - 获取Agent列表
 - [ ] 实现GET /api/agents/{agent_id} - 获取Agent详情
 - [ ] 实现POST /api/agents - 创建Agent（管理员）
 - [ ] 实现PUT /api/agents/{agent_id} - 更新Agent（管理员）
 - [ ] 实现DELETE /api/agents/{agent_id} - 删除Agent（管理员）
+- [ ] 实现统一认证中间件（支持User JWT和Agent API Key）⭐ 新增
 
 **交付物**:
 - `src/interfaces/api/schemas/agent_schema.py`
 - `src/interfaces/api/rest/agent.py`
+- `src/infrastructure/security/unified_auth_middleware.py` ⭐ 新增
+
+**统一认证中间件设计**:
+```python
+# 支持两种认证方式
+async def unified_auth_middleware(request: Request, call_next):
+    auth_header = request.headers.get("Authorization")
+
+    if auth_header.startswith("Bearer "):
+        # User JWT认证
+        token = auth_header[7:]
+        user_id = jwt_service.verify_token(token)
+        request.state.actor = Actor.from_user(user_id)
+
+    elif auth_header.startswith("ApiKey "):
+        # Agent API Key认证
+        api_key = ApiKey(auth_header[7:])
+        agent = await agent_repo.find_by_api_key(api_key)
+        if agent and agent.verify_api_key(api_key):
+            request.state.actor = Actor.from_agent(agent.id)
+        else:
+            raise UnauthorizedException()
+
+    return await call_next(request)
+```
 
 ### 7. Contact接口层（新增）
 
@@ -420,6 +593,7 @@ def test_user_add_agent_contact():
     owner = Actor.from_user(user_id)
     target = Actor.from_agent(agent_id)
     contact = Contact.create(owner, target, ContactType.FAVORITE, "我的AI助手")
+    # 仓储层会自动创建Participant记录
 
 # 场景2: User添加另一个User为好友
 def test_user_add_user_friend():
@@ -432,6 +606,16 @@ def test_agent_add_agent_contact():
     owner = Actor.from_agent(agent1_id)
     target = Actor.from_agent(agent2_id)
     contact = Contact.create(owner, target, ContactType.COLLEAGUE)
+
+# 场景4: Agent注册和认证
+def test_agent_registration_and_auth():
+    # 注册Agent
+    result = await register_agent_handler.handle(RegisterAgentCommand(...))
+    api_key = result.api_key  # 仅此一次获取
+
+    # 使用API Key认证
+    request.headers["Authorization"] = f"ApiKey {api_key.value}"
+    # 中间件验证并注入Actor
 ```
 
 ## ✅ 验收标准
@@ -451,60 +635,88 @@ def test_agent_add_agent_contact():
 
 ## 🔧 技术要点
 
-### 1. Actor值对象设计
+### 1. 双层抽象架构
 
-Actor是核心抽象，统一表示User或Agent：
+**领域层使用Actor，数据库层使用Participant**：
 ```python
-# 使用示例
-user_actor = Actor.from_user(user_id)
-agent_actor = Actor.from_agent(agent_id)
+# 应用层：使用Actor
+contact = Contact.create(
+    owner=Actor.from_user(user_id),
+    target=Actor.from_agent(agent_id)
+)
 
+# 仓储层：自动转换为Participant
+class PostgresContactRepository:
+    async def save(self, contact: Contact):
+        # 1. 确保Participant存在
+        owner_participant = await self.participant_repo.find_or_create(contact.owner)
+        target_participant = await self.participant_repo.find_or_create(contact.target)
+
+        # 2. 使用participant_id保存
+        model = ContactModel(
+            owner_id=owner_participant.id,
+            target_id=target_participant.id,
+            ...
+        )
+```
+
+### 2. Participant自动管理
+
+仓储层的`find_or_create`模式：
+```python
+async def find_or_create(self, actor: Actor) -> Participant:
+    # 1. 先查找
+    participant = await self.find_by_actor(actor)
+
+    # 2. 不存在则创建
+    if not participant:
+        participant = Participant.from_actor(actor)
+        await self.save(participant)
+
+    return participant
+```
+
+### 3. 数据完整性保证
+
+通过数据库外键约束：
+- `participants.user_id` → `users.id` (ON DELETE CASCADE)
+- `participants.agent_id` → `agents.id` (ON DELETE CASCADE)
+- `contacts.owner_id` → `participants.id` (ON DELETE CASCADE)
+- `contacts.target_id` → `participants.id` (ON DELETE CASCADE)
+
+### 4. Agent独立认证
+
+使用API Key而非JWT：
+```python
+# Agent注册时生成API Key
+api_key = ApiKey.generate()  # ak_<32-char-random>
+agent.api_key_hash = bcrypt.hashpw(api_key.value.encode(), ...)
+
+# Agent使用API Key认证
+Authorization: ApiKey ak_abc123...
+
+# 中间件验证
+if auth_header.startswith("ApiKey "):
+    api_key = ApiKey(auth_header[7:])
+    agent = await agent_repo.find_by_api_key(api_key)
+    if agent.verify_api_key(api_key):
+        request.state.actor = Actor.from_agent(agent.id)
+```
+
+### 5. 统一的Actor抽象
+
+一个Actor可以表示User或Agent：
+```python
 # 在Contact中使用
 contact = Contact.create(user_actor, agent_actor)
 
 # 在Message中使用（迭代7）
-message = Message.create(conversation_id, user_actor, "Hello!")
+message = Message.create(conversation_id, agent_actor, "Hello!")
+
+# 在权限检查中使用
+if current_actor.is_agent():
+    # Agent特定逻辑
 ```
-
-### 2. 多态引用的应用层验证
-
-由于没有数据库外键约束，需要在应用层验证：
-```python
-async def validate_actor(actor: Actor) -> bool:
-    if actor.is_user():
-        user = await user_repo.find_by_id(actor.actor_id)
-        return user is not None
-    elif actor.is_agent():
-        agent = await agent_repo.find_by_id(actor.actor_id)
-        return agent is not None
-    return False
-```
-
-### 3. Contacts表的灵活性
-
-一张表覆盖所有关系类型：
-- User收藏Agent: `owner_type='user', target_type='agent', contact_type='favorite'`
-- User添加好友: `owner_type='user', target_type='user', contact_type='friend'`
-- Agent认识Agent: `owner_type='agent', target_type='agent', contact_type='colleague'`
-
-### 4. 查询优化
-
-使用复合索引优化查询：
-```sql
--- 查询某个User的所有Agent联系人
-SELECT * FROM contacts
-WHERE owner_type='user' AND owner_id=? AND target_type='agent';
-
--- 查询某个Agent的所有联系人
-SELECT * FROM contacts
-WHERE owner_type='agent' AND owner_id=?;
-```
-
-### 5. 权限控制
-
-- 普通用户：只能管理自己的联系人
-- Agent：可以管理自己的联系人（通过API或自动化）
-- 管理员：可以创建、更新、删除Agent
 
 ## 🔜 下一步
 
@@ -514,23 +726,30 @@ WHERE owner_type='agent' AND owner_id=?;
 
 完成本迭代后，系统将具备：
 - ✅ 完整的Agent管理功能
+- ✅ Agent独立认证系统（API Key）
 - ✅ 统一的联系人关系系统
 - ✅ 支持User-User、User-Agent、Agent-Agent关系
 - ✅ Actor值对象作为统一抽象
+- ✅ Participant中间表保证数据完整性
+- ✅ 双层抽象架构（Actor + Participant）
 - ✅ 3个默认Agent（hans, alice, bob）
 - ✅ Agent和Contact相关的API端点
+- ✅ 统一认证中间件（支持User JWT和Agent API Key）
 - ✅ 完整的测试覆盖
 
-## 🎯 方案C的优势
+## 🎯 双层抽象架构的优势
 
-1. **结构简洁**：无需Participant中间表
-2. **关系完整**：contacts表天然覆盖所有类型间的关系
-3. **领域清晰**：User和Agent各自保持领域完整性
-4. **易于扩展**：未来可轻松添加新的actor_type
-5. **性能良好**：减少JOIN，查询更直接
+1. **领域清晰**：应用层使用Actor，保持领域模型简洁
+2. **数据完整性**：数据库层使用Participant + 外键约束
+3. **自动管理**：仓储层自动处理Actor ↔ Participant转换
+4. **应用层简化**：无需手动验证Actor存在性
+5. **性能优化**：减少应用层验证查询
+6. **易于调试**：数据库层面就能发现数据问题
+7. **Agent一等公民**：Agent可以独立注册、认证、添加联系人
+8. **统一认证**：User和Agent使用统一的Actor抽象
 
 ---
 
 **创建日期**: 2026-03-16
 **修订日期**: 2026-03-16
-**修订原因**: 采用方案C（多态Actor模型），用contacts表替代user_agents表
+**修订原因**: 采用双层抽象架构（Actor + Participant），Agent独立认证，数据库外键约束
