@@ -6,21 +6,16 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.infrastructure.config import settings
 from src.infrastructure.logging import get_logger, setup_logging
 from src.infrastructure.persistence.database import close_database, init_database
-from src.infrastructure.security.jwt_service import (
-    JWTExpiredError,
-    JWTInvalidError,
-    jwt_service,
-)
+from src.infrastructure.security.unified_auth_middleware import UnifiedAuthMiddleware
 from src.interfaces.api.exception_handlers import register_exception_handlers
 from src.interfaces.api.rest import agent, auth, contact, user
 from src.interfaces.api.schemas.response import ApiResponse
-from src.infrastructure.security.unified_auth_middleware import UnifiedAuthMiddleware
 
 # 配置日志
 setup_logging()
@@ -54,109 +49,93 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Database connection closed")
 
 
-# 创建FastAPI应用
-app = FastAPI(
-    title=settings.app_name,
-    version=settings.api_version,
-    debug=settings.debug,
-    lifespan=lifespan,
-)
+def configure_middlewares(app: FastAPI) -> None:
+    """配置应用中间件。
 
-# 注册异常处理器
-register_exception_handlers(app)
-
-# 配置CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.get_cors_origins_list(),
-    allow_credentials=settings.cors_allow_credentials,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# 添加统一认证中间件（支持User JWT和Agent API Key）
-app.add_middleware(UnifiedAuthMiddleware)
-
-
-# 认证中间件（函数式）- 已被UnifiedAuthMiddleware替代，保留作为备份
-# @app.middleware("http")
-# async def auth_middleware(request: Request, call_next):
-#     """认证中间件，验证JWT Token并注入user_id到request.state。
-#
-#     Args:
-#         request: FastAPI请求对象
-#         call_next: 下一个中间件或路由处理器
-#
-#     Returns:
-#         响应对象
-#     """
-#     # 公开路径，不需要认证
-#     public_paths = ["/", "/health", "/docs", "/redoc", "/openapi.json", "/api/auth/register", "/api/auth/login"]
-#
-#     if request.url.path in public_paths:
-#         return await call_next(request)
-#
-#     # 提取Authorization header
-#     authorization = request.headers.get("Authorization")
-#
-#     if authorization and authorization.startswith("Bearer "):
-#         token = authorization.split(" ")[1]
-#
-#         try:
-#             # 验证token并提取user_id
-#             user_id = jwt_service.get_user_id_from_token(token)
-#
-#             if user_id:
-#                 # 注入user_id到request.state
-#                 request.state.user_id = user_id
-#                 request.state.authenticated = True
-#                 logger.debug(f"User authenticated: {user_id}")
-#             else:
-#                 request.state.authenticated = False
-#                 logger.warning("Token payload missing 'sub' field")
-#         except (JWTExpiredError, JWTInvalidError) as e:
-#             request.state.authenticated = False
-#             logger.warning(f"Token validation failed: {e}")
-#     else:
-#         request.state.authenticated = False
-#
-#     return await call_next(request)
-
-
-# 注册路由
-app.include_router(auth.router)
-app.include_router(user.router)
-app.include_router(agent.router, prefix="/api")
-app.include_router(contact.router, prefix="/api")
-
-
-@app.get("/", response_model=ApiResponse[dict[str, str]])
-async def root() -> ApiResponse[dict[str, str]]:
-    """根路径健康检查。
-
-    Returns:
-        包含应用信息的响应
+    Args:
+        app: FastAPI应用实例
     """
-    logger.info("Root endpoint accessed")
-    return ApiResponse.success(
-        data={
-            "app": settings.app_name,
-            "version": settings.api_version,
-            "status": "running",
-            "environment": settings.app_env,
-        }
+    # 配置CORS
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.get_cors_origins_list(),
+        allow_credentials=settings.cors_allow_credentials,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
+    # 添加统一认证中间件（支持User JWT和Agent API Key）
+    app.add_middleware(UnifiedAuthMiddleware)
 
-@app.get("/health", response_model=ApiResponse[dict[str, str]])
-async def health_check() -> ApiResponse[dict[str, str]]:
-    """健康检查端点。
+
+def register_routers(app: FastAPI) -> None:
+    """注册应用路由。
+
+    Args:
+        app: FastAPI应用实例
+    """
+    app.include_router(auth.router)
+    app.include_router(user.router)
+    app.include_router(agent.router, prefix="/api")
+    app.include_router(contact.router, prefix="/api")
+
+
+def create_application() -> FastAPI:
+    """创建并配置FastAPI应用。
 
     Returns:
-        健康状态信息
+        配置完成的FastAPI应用实例
     """
-    logger.debug("Health check endpoint accessed")
-    return ApiResponse.success(data={"status": "healthy"})
+    # 创建FastAPI应用
+    app = FastAPI(
+        title=settings.app_name,
+        version=settings.api_version,
+        debug=settings.debug,
+        lifespan=lifespan,
+    )
+
+    # 注册异常处理器
+    register_exception_handlers(app)
+
+    # 配置中间件
+    configure_middlewares(app)
+
+    # 注册路由
+    register_routers(app)
+
+    # 注册健康检查端点
+    @app.get("/", response_model=ApiResponse[dict[str, str]])
+    async def root() -> ApiResponse[dict[str, str]]:
+        """根路径健康检查。
+
+        Returns:
+            包含应用信息的响应
+        """
+        logger.info("Root endpoint accessed")
+        return ApiResponse.success(
+            data={
+                "app": settings.app_name,
+                "version": settings.api_version,
+                "status": "running",
+                "environment": settings.app_env,
+            }
+        )
+
+    @app.get("/health", response_model=ApiResponse[dict[str, str]])
+    async def health_check() -> ApiResponse[dict[str, str]]:
+        """健康检查端点。
+
+        Returns:
+            健康状态信息
+        """
+        logger.debug("Health check endpoint accessed")
+        return ApiResponse.success(data={"status": "healthy"})
+
+    return app
+
+
+# 创建应用实例
+app = create_application()
 
 
 if __name__ == "__main__":
