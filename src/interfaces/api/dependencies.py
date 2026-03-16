@@ -12,6 +12,33 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.infrastructure.persistence.database import get_db
 from src.infrastructure.persistence.models import UserModel
+from src.domain.shared.value_objects.actor import Actor
+
+
+async def get_current_actor(request: Request) -> Actor:
+    """获取当前Actor（User或Agent）。
+
+    从request.state中获取actor（由统一认证中间件注入）。
+
+    Args:
+        request: FastAPI请求对象
+
+    Returns:
+        Actor值对象
+
+    Raises:
+        HTTPException: 如果未认证
+    """
+    actor = getattr(request.state, "actor", None)
+
+    if not actor:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer or ApiKey"},
+        )
+
+    return actor
 
 
 async def get_current_user_id(request: Request) -> str:
@@ -106,6 +133,7 @@ async def get_current_active_user(
 
 
 # 类型别名，方便在路由中使用
+CurrentActor = Annotated[Actor, Depends(get_current_actor)]
 CurrentUserId = Annotated[str, Depends(get_current_user_id)]
 CurrentUser = Annotated[UserModel, Depends(get_current_user)]
 CurrentActiveUser = Annotated[UserModel, Depends(get_current_active_user)]

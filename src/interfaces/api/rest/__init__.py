@@ -1,5 +1,5 @@
 """REST API路由模块。"""
 
-from . import auth, user
+from . import agent, auth, contact, user
 
-__all__ = ["auth", "user"]
+__all__ = ["auth", "user", "agent", "contact"]
