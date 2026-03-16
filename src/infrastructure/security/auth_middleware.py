@@ -52,6 +52,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # 提取token
         token = self._extract_token(request)
+        print(f"[AuthMiddleware] Path: {request.url.path}")
+        print(f"[AuthMiddleware] Token: {token[:20] if token else None}")
 
         if not token:
             # 如果没有token，继续处理请求（由路由的依赖来决定是否需要认证）

@@ -6,14 +6,19 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.infrastructure.config import settings
 from src.infrastructure.logging import get_logger, setup_logging
 from src.infrastructure.persistence.database import close_database, init_database
+from src.infrastructure.security.jwt_service import (
+    JWTExpiredError,
+    JWTInvalidError,
+    jwt_service,
+)
 from src.interfaces.api.exception_handlers import register_exception_handlers
-from src.interfaces.api.rest import auth
+from src.interfaces.api.rest import auth, user
 from src.interfaces.api.schemas.response import ApiResponse
 
 # 配置日志
@@ -68,8 +73,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# 认证中间件（函数式）
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """认证中间件，验证JWT Token并注入user_id到request.state。
+
+    Args:
+        request: FastAPI请求对象
+        call_next: 下一个中间件或路由处理器
+
+    Returns:
+        响应对象
+    """
+    # 公开路径，不需要认证
+    public_paths = ["/", "/health", "/docs", "/redoc", "/openapi.json", "/api/auth/register", "/api/auth/login"]
+
+    if request.url.path in public_paths:
+        return await call_next(request)
+
+    # 提取Authorization header
+    authorization = request.headers.get("Authorization")
+
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1]
+
+        try:
+            # 验证token并提取user_id
+            user_id = jwt_service.get_user_id_from_token(token)
+
+            if user_id:
+                # 注入user_id到request.state
+                request.state.user_id = user_id
+                request.state.authenticated = True
+                logger.debug(f"User authenticated: {user_id}")
+            else:
+                request.state.authenticated = False
+                logger.warning("Token payload missing 'sub' field")
+        except (JWTExpiredError, JWTInvalidError) as e:
+            request.state.authenticated = False
+            logger.warning(f"Token validation failed: {e}")
+    else:
+        request.state.authenticated = False
+
+    return await call_next(request)
+
+
 # 注册路由
 app.include_router(auth.router)
+app.include_router(user.router)
 
 
 @app.get("/", response_model=ApiResponse[dict[str, str]])

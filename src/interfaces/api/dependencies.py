@@ -3,6 +3,7 @@
 提供认证、数据库等依赖。
 """
 
+import uuid
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
@@ -57,7 +58,16 @@ async def get_current_user(
     Raises:
         HTTPException: 如果用户不存在
     """
-    stmt = select(UserModel).where(UserModel.id == user_id)
+    # 将字符串user_id转换为UUID
+    try:
+        user_uuid = uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid user ID format",
+        )
+
+    stmt = select(UserModel).where(UserModel.id == user_uuid)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
