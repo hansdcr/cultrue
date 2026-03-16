@@ -99,3 +99,7 @@ async def close_database() -> None:
     """关闭全局数据库连接。"""
     if _db_manager is not None:
         await _db_manager.close()
+
+
+# 别名，方便使用
+get_db = get_db_session

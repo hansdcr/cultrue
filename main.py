@@ -13,6 +13,7 @@ from src.infrastructure.config import settings
 from src.infrastructure.logging import get_logger, setup_logging
 from src.infrastructure.persistence.database import close_database, init_database
 from src.interfaces.api.exception_handlers import register_exception_handlers
+from src.interfaces.api.rest import auth
 from src.interfaces.api.schemas.response import ApiResponse
 
 # 配置日志
@@ -66,6 +67,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 注册路由
+app.include_router(auth.router)
 
 
 @app.get("/", response_model=ApiResponse[dict[str, str]])
