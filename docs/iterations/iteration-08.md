@@ -52,7 +52,8 @@ class CreateConversationCommand:
 - Direct会话必须有且仅有2个成员
 - Group会话至少需要2个成员
 - 检查Direct会话是否已存在（避免重复创建）
-- 验证所有Actor是否有效（User或Agent存在）
+- 无需手动验证Actor存在性（仓储层自动处理）⭐ 简化
+- 数据库级唯一约束防止并发竞态 ⭐ 新增
 ```
 
 ### 2. Message应用层
@@ -87,7 +88,7 @@ class SendMessageCommand:
 # 业务规则
 - 验证发送者是会话成员
 - 自动更新会话的message_count和last_message_at
-- 验证Actor是否有效
+- 无需手动验证Actor存在性（仓储层自动处理）⭐ 简化
 ```
 
 ### 3. Conversation REST API
@@ -258,64 +259,55 @@ async def verify_conversation_member(
     return conversation
 ```
 
-### 6. Actor验证服务
+### 6. 移除ActorValidationService（已简化）
 
-**任务**:
-- [ ] 创建ActorValidationService
-- [ ] 实现Actor存在性验证
-- [ ] 实现批量Actor验证
+**说明**：由于采用Participant中间表 + 外键约束，数据完整性由数据库保证，无需应用层手动验证Actor存在性。
 
-**交付物**:
-- `src/application/messaging/services/actor_validation_service.py`
+**原设计（已废弃）**：
+- ~~ActorValidationService~~
+- ~~validate_actor方法~~
+- ~~validate_actors方法~~
 
-**实现要点**:
+**新设计**：
+- 仓储层使用`find_or_create`自动管理Participant
+- 数据库外键约束保证数据完整性
+- 应用层代码更简洁
+
+**Command Handler示例**：
 ```python
-class ActorValidationService:
-    """Actor验证服务。"""
-
+class CreateConversationCommandHandler:
     def __init__(
         self,
-        user_repository: UserRepository,
-        agent_repository: AgentRepository
+        conversation_repo: ConversationRepository
+        # ⭐ 无需注入ActorValidationService
     ):
-        self.user_repository = user_repository
-        self.agent_repository = agent_repository
+        self.conversation_repo = conversation_repo
 
-    async def validate_actor(self, actor: Actor) -> bool:
-        """验证Actor是否存在。"""
-        if actor.is_user():
-            user = await self.user_repository.find_by_id(actor.actor_id)
-            return user is not None and user.is_active
+    async def handle(self, command: CreateConversationCommand) -> ConversationDTO:
+        # ⭐ 无需手动验证Actor
+        # 仓储层会自动处理Participant创建和验证
+
+        # 检查Direct会话是否已存在
+        if command.conversation_type == "direct":
+            existing = await self.conversation_repo.find_direct_conversation(
+                command.members[0], command.members[1]
+            )
+            if existing and existing.status == ConversationStatus.ACTIVE:
+                return ConversationDTO.from_entity(existing)
+
+        # 创建会话
+        if command.conversation_type == "direct":
+            conversation = Conversation.create_direct(
+                command.members[0], command.members[1]
+            )
         else:
-            agent = await self.agent_repository.find_by_id(actor.actor_id)
-            return agent is not None and agent.is_active
+            conversation = Conversation.create_group(
+                command.title, command.members
+            )
 
-    async def validate_actors(self, actors: List[Actor]) -> None:
-        """批量验证Actors，如果有无效的则抛出异常。"""
-        for actor in actors:
-            if not await self.validate_actor(actor):
-                raise ValidationException(
-                    f"Invalid actor: {actor.actor_type}:{actor.actor_id}"
-                )
-
-    async def get_actor_display_info(self, actor: Actor) -> dict:
-        """获取Actor的显示信息（名称、头像等）。"""
-        if actor.is_user():
-            user = await self.user_repository.find_by_id(actor.actor_id)
-            return {
-                "actor_type": "user",
-                "actor_id": str(user.id),
-                "display_name": user.full_name or user.username,
-                "avatar_url": user.avatar_url
-            }
-        else:
-            agent = await self.agent_repository.find_by_id(actor.actor_id)
-            return {
-                "actor_type": "agent",
-                "actor_id": str(agent.id),
-                "display_name": agent.name,
-                "avatar_url": agent.avatar
-            }
+        # 保存（仓储层自动处理Participant）
+        saved = await self.conversation_repo.save(conversation)
+        return ConversationDTO.from_entity(saved)
 ```
 
 ### 7. 集成到main.py
@@ -434,27 +426,59 @@ async def test_non_member_cannot_view_conversation(client, auth_headers):
 
 ## 🔧 技术要点
 
-### 1. Actor验证
+### 1. 统一认证模型
 
-由于Actor是值对象，需要在应用层验证其有效性：
+从认证中间件注入的Actor（支持User和Agent）：
 ```python
-# 在CreateConversationCommandHandler中
-async def handle(self, command: CreateConversationCommand) -> ConversationDTO:
-    # 验证所有成员是否有效
-    await self.actor_validation_service.validate_actors(command.members)
+# 依赖注入
+async def get_current_actor(request: Request) -> Actor:
+    """从请求中获取当前认证的Actor（User或Agent）。"""
+    if not hasattr(request.state, "actor"):
+        raise UnauthorizedException("Not authenticated")
+    return request.state.actor  # ⭐ 统一使用actor，而非user_id
 
-    # 创建会话
-    conversation = Conversation.create_direct(
-        command.members[0],
-        command.members[1]
+# 认证中间件（迭代6已实现）
+async def unified_auth_middleware(request: Request, call_next):
+    auth_header = request.headers.get("Authorization")
+
+    if auth_header.startswith("Bearer "):
+        # User JWT认证
+        token = auth_header[7:]
+        user_id = jwt_service.verify_token(token)
+        request.state.actor = Actor.from_user(user_id)  # ⭐ 注入Actor
+
+    elif auth_header.startswith("ApiKey "):
+        # Agent API Key认证
+        api_key = ApiKey(auth_header[7:])
+        agent = await agent_repo.find_by_api_key(api_key)
+        if agent and agent.verify_api_key(api_key):
+            request.state.actor = Actor.from_agent(agent.id)  # ⭐ 注入Actor
+        else:
+            raise UnauthorizedException()
+
+    return await call_next(request)
+
+# API端点使用
+@router.post("/api/conversations/{conversation_id}/messages")
+async def send_message(
+    conversation_id: UUID,
+    request: SendMessageRequest,
+    current_actor: Actor = Depends(get_current_actor)  # ⭐ 获取Actor
+):
+    command = SendMessageCommand(
+        conversation_id=conversation_id,
+        sender=current_actor,  # ⭐ 可以是User或Agent
+        message_type=request.message_type,
+        content=request.content,
+        metadata=request.metadata
     )
-
-    # 保存
-    saved = await self.conversation_repository.save(conversation)
-    return ConversationDTO.from_entity(saved)
+    result = await handler.handle(command)
+    return ApiResponse(code=201, data=result.dict())
 ```
 
-### 2. 避免重复创建Direct会话
+### 2. 仓储层自动管理Participant
+
+无需应用层手动验证：
 
 创建Direct会话前检查是否已存在：
 ```python
@@ -577,13 +601,15 @@ class MessageDTO:
 - ✅ 完整的会话管理API
 - ✅ 完整的消息管理API
 - ✅ 支持多种通信类型（User-User, User-Agent, Agent-Agent）
-- ✅ Actor验证机制
+- ✅ 统一认证模型（User JWT和Agent API Key）
+- ✅ 仓储层自动管理Participant
+- ✅ 数据库级Direct会话去重
 - ✅ 权限控制
 - ✅ 完整的测试覆盖
-- ✅ 与迭代6、7保持架构一致性
+- ✅ 与迭代6、7保持架构完全一致
 
 ---
 
 **创建日期**: 2026-03-16
 **修订日期**: 2026-03-16
-**修订原因**: 采用Solution C的Actor模型，移除Participant实体依赖
+**修订原因**: 采用双层抽象架构（Actor + Participant），统一认证模型，移除ActorValidationService

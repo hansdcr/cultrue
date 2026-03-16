@@ -133,11 +133,19 @@ class ApiKey:
             raise ValueError("API Key must start with 'ak_'")
         self._value = value
 
+    @property
+    def value(self) -> str:
+        return self._value
+
     @classmethod
     def generate(cls) -> "ApiKey":
         """生成新的API Key。"""
         random_str = secrets.token_urlsafe(24)[:32]
         return cls(f"ak_{random_str}")
+
+    def get_prefix(self) -> str:
+        """获取前缀（前16个字符，用于索引）。"""
+        return self._value[:16]  # ⭐ 返回 "ak_" + 前12个字符
 
     def mask(self) -> str:
         """返回掩码版本（用于显示）。"""
@@ -171,7 +179,8 @@ class Agent:
     description: Optional[str]
     system_prompt: Optional[str]
     model_config: AgentConfig
-    api_key_hash: str  # ⭐ 新增：API Key哈希值
+    api_key_prefix: str  # ⭐ 新增：API Key前缀（用于快速查找）
+    api_key_hash: str    # API Key哈希值
     is_active: bool
     created_by: Optional[UUID]  # 创建者的user_id
     created_at: datetime
@@ -188,6 +197,7 @@ class Agent:
     def regenerate_api_key(self) -> ApiKey:
         """重新生成API Key。"""
         new_api_key = ApiKey.generate()
+        self.api_key_prefix = new_api_key.get_prefix()  # ⭐ 提取前缀
         self.api_key_hash = bcrypt.hashpw(new_api_key.value.encode(), bcrypt.gensalt()).decode()
         return new_api_key
 ```
@@ -383,7 +393,8 @@ CREATE TABLE agents (
     description TEXT,
     system_prompt TEXT,
     model_config JSONB,
-    api_key_hash VARCHAR(255) NOT NULL,  -- ⭐ 新增：API Key哈希值
+    api_key_prefix VARCHAR(16) NOT NULL,  -- ⭐ 新增：API Key前缀（用于索引）
+    api_key_hash VARCHAR(255) NOT NULL,   -- API Key哈希值
     is_active BOOLEAN DEFAULT TRUE,
     created_by UUID REFERENCES users(id),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -392,6 +403,7 @@ CREATE TABLE agents (
 
 CREATE INDEX idx_agents_agent_id ON agents(agent_id);
 CREATE INDEX idx_agents_is_active ON agents(is_active);
+CREATE INDEX idx_agents_api_key_prefix ON agents(api_key_prefix);  -- ⭐ 新增索引
 
 -- contacts表（使用外键引用participants）⭐ 修改
 CREATE TABLE contacts (
@@ -690,18 +702,31 @@ async def find_or_create(self, actor: Actor) -> Participant:
 ```python
 # Agent注册时生成API Key
 api_key = ApiKey.generate()  # ak_<32-char-random>
+agent.api_key_prefix = api_key.get_prefix()  # ⭐ 存储前缀用于索引
 agent.api_key_hash = bcrypt.hashpw(api_key.value.encode(), ...)
 
 # Agent使用API Key认证
 Authorization: ApiKey ak_abc123...
 
-# 中间件验证
+# 中间件验证（高效查找）
 if auth_header.startswith("ApiKey "):
     api_key = ApiKey(auth_header[7:])
-    agent = await agent_repo.find_by_api_key(api_key)
-    if agent.verify_api_key(api_key):
+    key_prefix = api_key.get_prefix()
+
+    # ⭐ 使用前缀索引快速查找（而非全表扫描）
+    agent = await agent_repo.find_by_api_key_prefix(key_prefix)
+
+    if agent and agent.verify_api_key(api_key):
         request.state.actor = Actor.from_agent(agent.id)
+    else:
+        raise UnauthorizedException()
 ```
+
+**性能优化**：
+- 存储api_key_prefix（前16字符）用于索引
+- find_by_api_key_prefix先通过索引快速定位
+- 然后再用bcrypt验证完整hash
+- 避免全表遍历比对hash
 
 ### 5. 统一的Actor抽象
 

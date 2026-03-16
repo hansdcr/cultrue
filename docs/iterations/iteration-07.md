@@ -16,7 +16,10 @@
 
 ## 💡 设计理念
 
-**核心思想**：使用Actor值对象统一抽象User和Agent，通过多态引用实现任意类型间的通信。
+**双层抽象架构（与迭代6保持一致）**：
+- **领域层**：使用Actor值对象统一抽象User和Agent
+- **数据库层**：使用Participant中间表，通过外键约束保证数据完整性
+- **仓储层**：自动管理Actor ↔ Participant转换，对应用层透明
 
 ### 设计优势
 
@@ -24,9 +27,9 @@
 - ✅ 支持User ↔ Agent通信
 - ✅ 支持Agent ↔ Agent通信
 - ✅ 支持群聊（多人/多Agent）
-- ✅ 无需中间表，数据模型简洁
+- ✅ 数据完整性由数据库外键保证
 - ✅ 符合DDD设计原则
-- ✅ 与迭代6的Actor模型保持一致
+- ✅ 与迭代6的Participant架构完全一致
 
 ## 📝 任务清单
 
@@ -256,47 +259,68 @@ CREATE TABLE conversations (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- conversation_members表（会话成员，使用多态引用）
+-- conversation_members表（会话成员，使用外键引用participants）⭐ 修改
 CREATE TABLE conversation_members (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-    actor_type VARCHAR(20) NOT NULL,  -- 'user' or 'agent'
-    actor_id UUID NOT NULL,           -- user_id or agent_id
+    participant_id UUID NOT NULL REFERENCES participants(id) ON DELETE CASCADE,  -- ⭐ 外键
     joined_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     last_read_at TIMESTAMP WITH TIME ZONE,
     is_muted BOOLEAN DEFAULT FALSE,
-    UNIQUE(conversation_id, actor_type, actor_id),
-    CONSTRAINT check_actor_type CHECK (actor_type IN ('user', 'agent'))
+    UNIQUE(conversation_id, participant_id)
 );
 
--- messages表（消息，使用多态引用）
+-- messages表（消息，使用外键引用participants）⭐ 修改
 CREATE TABLE messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-    sender_type VARCHAR(20) NOT NULL,  -- 'user' or 'agent'
-    sender_id UUID NOT NULL,           -- user_id or agent_id
+    sender_id UUID NOT NULL REFERENCES participants(id) ON DELETE CASCADE,  -- ⭐ 外键
     message_type VARCHAR(20) DEFAULT 'text',
     content TEXT NOT NULL,
     metadata JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT check_sender_type CHECK (sender_type IN ('user', 'agent'))
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Direct会话去重约束 ⭐ 新增
+-- 为Direct会话创建唯一约束，防止并发创建重复会话
+CREATE UNIQUE INDEX idx_direct_conversation_members
+ON conversation_members (
+    LEAST(participant_id, (
+        SELECT cm2.participant_id
+        FROM conversation_members cm2
+        WHERE cm2.conversation_id = conversation_members.conversation_id
+        AND cm2.participant_id != conversation_members.participant_id
+        LIMIT 1
+    )),
+    GREATEST(participant_id, (
+        SELECT cm2.participant_id
+        FROM conversation_members cm2
+        WHERE cm2.conversation_id = conversation_members.conversation_id
+        AND cm2.participant_id != conversation_members.participant_id
+        LIMIT 1
+    ))
+)
+WHERE (
+    SELECT conversation_type FROM conversations
+    WHERE id = conversation_members.conversation_id
+) = 'direct';
 
 -- 索引
 CREATE INDEX idx_conversations_type ON conversations(conversation_type);
 CREATE INDEX idx_conversations_status ON conversations(status);
 CREATE INDEX idx_conversations_last_message_at ON conversations(last_message_at DESC);
 CREATE INDEX idx_conversation_members_conversation_id ON conversation_members(conversation_id);
-CREATE INDEX idx_conversation_members_actor ON conversation_members(actor_type, actor_id);
+CREATE INDEX idx_conversation_members_participant_id ON conversation_members(participant_id);
 CREATE INDEX idx_messages_conversation_id ON messages(conversation_id);
-CREATE INDEX idx_messages_sender ON messages(sender_type, sender_id);
+CREATE INDEX idx_messages_sender_id ON messages(sender_id);
 CREATE INDEX idx_messages_created_at ON messages(created_at);
 ```
 
 **设计说明**:
-- **无需participants表**: 直接使用(actor_type, actor_id)多态引用
-- **外键验证**: 通过应用层逻辑确保actor_id有效（查询users或agents表）
-- **复合索引**: 在(actor_type, actor_id)上建立索引以优化查询性能
+- **使用Participant中间表**: conversation_members和messages引用participants.id
+- **外键约束**: 数据库层面保证数据完整性
+- **Direct会话去重**: 通过唯一索引防止并发创建重复会话
+- **仓储层自动管理**: 使用find_or_create模式确保Participant存在
 
 ### 5. 仓储实现
 
@@ -337,46 +361,76 @@ class MessageRepository(ABC):
     async def delete(self, message_id: UUID) -> None
 ```
 
-**Actor序列化示例**:
+**仓储实现要点**:
 ```python
-# 实体 → 模型
-def conversation_to_model(conversation: Conversation) -> ConversationModel:
-    model = ConversationModel(
-        id=conversation.id,
-        conversation_type=conversation.conversation_type.value,
-        title=conversation.title,
-        status=conversation.status.value,
-        message_count=conversation.message_count,
-        last_message_at=conversation.last_message_at,
-        created_at=conversation.created_at,
-        updated_at=conversation.updated_at
-    )
-    # 成员单独保存到conversation_members表
-    return model
+# PostgresConversationRepository
+class PostgresConversationRepository(ConversationRepository):
+    def __init__(
+        self,
+        session: AsyncSession,
+        participant_repo: ParticipantRepository  # ⭐ 注入
+    ):
+        self.session = session
+        self.participant_repo = participant_repo
 
-# 模型 → 实体
-async def model_to_conversation(
-    model: ConversationModel,
-    members: List[ConversationMemberModel]
-) -> Conversation:
-    actors = [
-        Actor(
-            actor_type=ActorType(m.actor_type),
-            actor_id=m.actor_id
+    async def save(self, conversation: Conversation) -> Conversation:
+        # 1. 保存Conversation主记录
+        conv_model = ConversationModel(...)
+        self.session.add(conv_model)
+
+        # 2. 保存members（确保Participant存在）
+        for member in conversation.members:
+            participant = await self.participant_repo.find_or_create(member)
+            member_model = ConversationMemberModel(
+                conversation_id=conversation.id,
+                participant_id=participant.id  # ⭐ 使用participant.id
+            )
+            self.session.add(member_model)
+
+        await self.session.flush()
+        return conversation
+
+    async def find_by_actor(self, actor: Actor, limit: int, offset: int) -> List[Conversation]:
+        # 1. 查找actor的Participant
+        participant = await self.participant_repo.find_by_actor(actor)
+        if not participant:
+            return []
+
+        # 2. 查询conversations（JOIN）
+        result = await self.session.execute(
+            select(ConversationModel)
+            .join(ConversationMemberModel)
+            .where(ConversationMemberModel.participant_id == participant.id)
+            .order_by(ConversationModel.last_message_at.desc())
+            .limit(limit).offset(offset)
         )
-        for m in members
-    ]
-    return Conversation(
-        id=model.id,
-        conversation_type=ConversationType(model.conversation_type),
-        title=model.title,
-        status=ConversationStatus(model.status),
-        members=actors,
-        message_count=model.message_count,
-        last_message_at=model.last_message_at,
-        created_at=model.created_at,
-        updated_at=model.updated_at
-    )
+        # 3. 转换为领域实体（使用Actor）
+        ...
+
+# PostgresMessageRepository
+class PostgresMessageRepository(MessageRepository):
+    def __init__(
+        self,
+        session: AsyncSession,
+        participant_repo: ParticipantRepository  # ⭐ 注入
+    ):
+        self.session = session
+        self.participant_repo = participant_repo
+
+    async def save(self, message: Message) -> Message:
+        # 1. 确保sender的Participant存在
+        sender_participant = await self.participant_repo.find_or_create(message.sender)
+
+        # 2. 保存Message
+        model = MessageModel(
+            id=message.id,
+            conversation_id=message.conversation_id,
+            sender_id=sender_participant.id,  # ⭐ 使用participant.id
+            ...
+        )
+        self.session.add(model)
+        await self.session.flush()
+        return message
 ```
 
 ### 6. 测试
@@ -463,39 +517,42 @@ async def test_group_conversation():
 
 ## 🔧 技术要点
 
-### 1. Actor值对象的优势
+### 1. 双层抽象架构的优势
 
-**简洁性**:
-- 无需中间表（participants）
-- 直接使用多态引用
-- 减少JOIN查询
+**领域层使用Actor，数据库层使用Participant**：
+- 应用层代码简洁，使用Actor值对象
+- 数据库层通过外键保证完整性
+- 仓储层自动转换，对应用层透明
 
-**一致性**:
-- 与迭代6的Contact系统保持一致
-- 统一的Actor抽象
-- 易于理解和维护
+### 2. Participant自动管理
 
-### 2. 多态引用
-
-使用(actor_type, actor_id)组合：
-```sql
--- 查询用户的所有会话
-SELECT c.* FROM conversations c
-JOIN conversation_members cm ON c.id = cm.conversation_id
-WHERE cm.actor_type = 'user' AND cm.actor_id = ?
-
--- 查询Agent的所有会话
-SELECT c.* FROM conversations c
-JOIN conversation_members cm ON c.id = cm.conversation_id
-WHERE cm.actor_type = 'agent' AND cm.actor_id = ?
+仓储层的`find_or_create`模式：
+```python
+async def find_or_create(self, actor: Actor) -> Participant:
+    participant = await self.find_by_actor(actor)
+    if not participant:
+        participant = Participant.from_actor(actor)
+        await self.save(participant)
+    return participant
 ```
 
-### 3. 会话类型
+### 3. Direct会话去重
+
+**数据库级约束**（防止并发竞态）：
+- 使用唯一索引约束两个participant_id的组合
+- 应用层先查询，数据库层保证幂等
+
+**应用层查询**：
+```python
+existing = await conversation_repo.find_direct_conversation(actor1, actor2)
+if existing and existing.status == ConversationStatus.ACTIVE:
+    return ConversationDTO.from_entity(existing)
+```
+
+### 4. 会话类型
 
 - **DIRECT**: 一对一会话（User ↔ User, User ↔ Agent, Agent ↔ Agent）
 - **GROUP**: 群聊（多个参与者）
-
-### 4. 消息计数优化
 
 在conversations表中维护message_count字段：
 ```sql
@@ -532,17 +589,10 @@ async def get_unread_count(conversation_id: UUID, actor: Actor) -> int:
 
 ### 6. 外键验证
 
-由于使用多态引用，数据库层面无法建立外键约束，需要在应用层验证：
-```python
-async def validate_actor(actor: Actor) -> bool:
-    """验证Actor是否存在。"""
-    if actor.is_user():
-        user = await user_repository.find_by_id(actor.actor_id)
-        return user is not None
-    else:
-        agent = await agent_repository.find_by_id(actor.actor_id)
-        return agent is not None
-```
+数据库层面通过外键约束自动验证：
+- conversation_members.participant_id → participants.id
+- messages.sender_id → participants.id
+- 无需应用层手动验证Actor存在性
 
 ## 🔜 下一步
 
@@ -553,13 +603,14 @@ async def validate_actor(actor: Actor) -> bool:
 完成本迭代后，系统将具备：
 - ✅ 统一的Actor值对象模型
 - ✅ 支持多种通信类型的数据模型
-- ✅ 简洁的会话和消息数据库表
+- ✅ Participant中间表保证数据完整性
+- ✅ Direct会话数据库级去重约束
 - ✅ 仓储接口和实现
 - ✅ 完整的测试覆盖
-- ✅ 与迭代6保持架构一致性
+- ✅ 与迭代6保持架构完全一致
 
 ---
 
 **创建日期**: 2026-03-16
 **修订日期**: 2026-03-16
-**修订原因**: 采用Solution C的Actor模型，移除Participant中间层
+**修订原因**: 采用双层抽象架构（Actor + Participant），与迭代6保持一致，添加Direct会话去重约束
