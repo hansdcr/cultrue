@@ -26,7 +26,7 @@ class RegisterAgentRequest(BaseModel):
     avatar: Optional[str] = Field(default=None, max_length=500)
     description: Optional[str] = Field(default=None)
     system_prompt: Optional[str] = Field(default=None)
-    model_config: Optional[AgentConfigSchema] = None
+    agent_model_config: Optional[AgentConfigSchema] = None
 
 
 class RegisterAgentResponse(BaseModel):
@@ -42,7 +42,7 @@ class CreateAgentRequest(BaseModel):
     avatar: Optional[str] = Field(default=None, max_length=500)
     description: Optional[str] = Field(default=None)
     system_prompt: Optional[str] = Field(default=None)
-    model_config: Optional[AgentConfigSchema] = None
+    agent_model_config: Optional[AgentConfigSchema] = None
 
 
 class UpdateAgentRequest(BaseModel):
@@ -51,7 +51,7 @@ class UpdateAgentRequest(BaseModel):
     avatar: Optional[str] = Field(default=None, max_length=500)
     description: Optional[str] = None
     system_prompt: Optional[str] = None
-    model_config: Optional[AgentConfigSchema] = None
+    agent_model_config: Optional[AgentConfigSchema] = None
 
 
 class AgentResponse(BaseModel):
@@ -62,7 +62,7 @@ class AgentResponse(BaseModel):
     avatar: Optional[str]
     description: Optional[str]
     system_prompt: Optional[str]
-    model_config: dict
+    agent_model_config: dict
     api_key_prefix: str
     is_active: bool
     created_by: Optional[str]

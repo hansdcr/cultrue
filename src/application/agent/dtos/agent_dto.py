@@ -15,7 +15,7 @@ class AgentDTO:
     avatar: Optional[str]
     description: Optional[str]
     system_prompt: Optional[str]
-    model_config: dict
+    agent_model_config: dict
     api_key_prefix: str
     is_active: bool
     created_by: Optional[str]
@@ -39,7 +39,7 @@ class AgentDTO:
             avatar=agent.avatar,
             description=agent.description,
             system_prompt=agent.system_prompt,
-            model_config=agent.model_config.to_dict(),
+            agent_model_config=agent.model_config.to_dict(),
             api_key_prefix=agent.api_key_prefix,
             is_active=agent.is_active,
             created_by=str(agent.created_by) if agent.created_by else None,

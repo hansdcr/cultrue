@@ -20,3 +20,15 @@ class DomainException(Exception):
         self.message = message
         self.code = code
         super().__init__(self.message)
+
+
+class NotFoundException(DomainException):
+    """资源未找到异常。"""
+
+    def __init__(self, message: str) -> None:
+        """初始化资源未找到异常。
+
+        Args:
+            message: 异常消息
+        """
+        super().__init__(message, "NOT_FOUND")

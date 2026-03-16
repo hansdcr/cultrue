@@ -65,7 +65,7 @@ async def register_agent(
         avatar=request.avatar,
         description=request.description,
         system_prompt=request.system_prompt,
-        model_config=request.model_config.model_dump() if request.model_config else None,
+        model_config=request.agent_model_config.model_dump() if request.agent_model_config else None,
     )
 
     result = await handler.handle(command)
@@ -117,7 +117,7 @@ async def create_agent(
         avatar=request.avatar,
         description=request.description,
         system_prompt=request.system_prompt,
-        model_config=request.model_config.model_dump() if request.model_config else None,
+        model_config=request.agent_model_config.model_dump() if request.agent_model_config else None,
     )
 
     result = await handler.handle(command)
@@ -195,7 +195,7 @@ async def update_agent(
         avatar=request.avatar,
         description=request.description,
         system_prompt=request.system_prompt,
-        model_config=request.model_config.model_dump() if request.model_config else None,
+        model_config=request.agent_model_config.model_dump() if request.agent_model_config else None,
     )
 
     result = await handler.handle(command)
