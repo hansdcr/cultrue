@@ -22,7 +22,7 @@ class PostgresAgentRepository(AgentRepository):
         """保存Agent。"""
         model = self._to_model(agent)
         self.session.add(model)
-        await self.session.flush()
+        await self.session.commit()
         await self.session.refresh(model)
         return self._to_entity(model)
 
@@ -82,7 +82,7 @@ class PostgresAgentRepository(AgentRepository):
         model.is_active = agent.is_active
         model.updated_at = agent.updated_at
 
-        await self.session.flush()
+        await self.session.commit()
         await self.session.refresh(model)
         return self._to_entity(model)
 

@@ -14,7 +14,8 @@ tests/
 │   ├── application/        # 应用层测试
 │   └── infrastructure/     # 基础设施层测试
 ├── integration/            # 集成测试
-│   ├── test_api.py        # API功能测试
+│   ├── test_api.py        # User API功能测试
+│   ├── test_agent_api.py  # Agent API功能测试
 │   └── test_database_models.py  # 数据库模型测试
 └── e2e/                    # 端到端测试
 ```
@@ -59,9 +60,28 @@ uv run pytest --cov=src --cov-report=html
 
 ## API功能测试
 
-### 测试文件
+### User API测试
 
-`tests/integration/test_api.py`
+详见 `tests/integration/test_api.py`
+
+### Agent API测试
+
+详见 [Agent API测试文档](./agent_api_testing.md)
+
+测试文件：`tests/integration/test_agent_api.py`
+
+快速运行：
+```bash
+# 运行所有Agent API测试
+python -m pytest tests/integration/test_agent_api.py -v
+
+# 运行特定测试类
+python -m pytest tests/integration/test_agent_api.py::TestAgentRegistrationAPI -v
+```
+
+### User API测试详情
+
+测试文件：`tests/integration/test_api.py`
 
 ### 测试覆盖
 
@@ -138,11 +158,17 @@ uv run pytest --cov=src --cov-report=html
 
 ### 测试结果
 
+#### User API测试
 ```
 ======================== 15 passed, 4 warnings in 1.97s ========================
 ```
-
 所有15个测试用例全部通过 ✅
+
+#### Agent API测试
+```
+======================== 10 passed, 16 warnings in 1.99s ========================
+```
+所有10个测试用例全部通过 ✅
 
 ## 测试最佳实践
 
