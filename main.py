@@ -17,7 +17,14 @@ from src.interfaces.api.exception_handlers import register_exception_handlers
 from src.interfaces.api.rest import agent, auth, contact, user, conversation, message
 from src.interfaces.api.schemas.response import ApiResponse
 from src.application.realtime.services.connection_manager import ConnectionManager
+from src.application.realtime.services.message_push_service import MessagePushService
+from src.application.realtime.services.online_status_service import OnlineStatusService
 from src.application.realtime.tasks.connection_cleanup import ConnectionCleanupTask
+from src.application.realtime.handlers.message_sent_handler import MessageSentEventHandler
+from src.application.realtime.handlers.message_deleted_handler import MessageDeletedEventHandler
+from src.application.shared.events.event_bus import EventBus
+from src.infrastructure.persistence.repositories.postgres_conversation_repository import PostgresConversationRepository
+from src.infrastructure.persistence.database import get_db_session
 from src.interfaces.websocket import endpoints as ws_endpoints
 
 # 配置日志

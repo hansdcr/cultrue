@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
 
 from src.application.realtime.services.connection_manager import ConnectionManager
+from src.application.realtime.services.online_status_service import OnlineStatusService
+from src.domain.messaging.repositories.conversation_repository import ConversationRepository
 from src.interfaces.websocket.auth import authenticate_websocket
 
 logger = logging.getLogger(__name__)
@@ -15,8 +17,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# 全局ConnectionManager实例（将在main.py中初始化）
+# 全局实例（将在main.py中初始化）
 _connection_manager: ConnectionManager = None
+_online_status_service: OnlineStatusService = None
+_conversation_repo: ConversationRepository = None
 
 
 def get_connection_manager() -> ConnectionManager:
@@ -26,6 +30,24 @@ def get_connection_manager() -> ConnectionManager:
         ConnectionManager实例
     """
     return _connection_manager
+
+
+def get_online_status_service() -> OnlineStatusService:
+    """获取OnlineStatusService实例。
+
+    Returns:
+        OnlineStatusService实例
+    """
+    return _online_status_service
+
+
+def get_conversation_repo() -> ConversationRepository:
+    """获取ConversationRepository实例。
+
+    Returns:
+        ConversationRepository实例
+    """
+    return _conversation_repo
 
 
 def set_connection_manager(manager: ConnectionManager) -> None:
@@ -38,40 +60,62 @@ def set_connection_manager(manager: ConnectionManager) -> None:
     _connection_manager = manager
 
 
+def set_online_status_service(service: OnlineStatusService) -> None:
+    """设置OnlineStatusService实例。
+
+    Args:
+        service: OnlineStatusService实例
+    """
+    global _online_status_service
+    _online_status_service = service
+
+
+def set_conversation_repo(repo: ConversationRepository) -> None:
+    """设置ConversationRepository实例。
+
+    Args:
+        repo: ConversationRepository实例
+    """
+    global _conversation_repo
+    _conversation_repo = repo
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(
     websocket: WebSocket,
     token: str = Query(None),
     api_key: str = Query(None),
     connection_manager: ConnectionManager = Depends(get_connection_manager),
+    online_status_service: OnlineStatusService = Depends(get_online_status_service),
+    conversation_repo: ConversationRepository = Depends(get_conversation_repo),
 ):
     """WebSocket连接端点。
 
     连接URL示例：
     - User: ws://localhost:8000/ws?token=<jwt_token>
     - Agent: ws://localhost:8000/ws?api_key=<api_key>
-
-    Args:
-        websocket: WebSocket连接
-        token: JWT token（User认证）
-        api_key: API Key（Agent认证）
-        connection_manager: 连接管理器
     """
-    # 1. 接受连接
     await websocket.accept()
 
+    actor = None
     try:
-        # 2. 认证
+        # 认证
         actor = await authenticate_websocket(websocket, token, api_key)
 
-        # 3. 注册连接
+        # 注册连接
         metadata = {
             "user_agent": websocket.headers.get("user-agent"),
             "client_ip": websocket.client.host if websocket.client else None,
         }
         connection = await connection_manager.connect(websocket, actor, metadata)
 
-        # 4. 发送连接成功消息
+        # 通知在线状态（如果有conversation_repo）
+        if online_status_service and conversation_repo:
+            conversations = await conversation_repo.find_by_actor(actor)
+            conversation_ids = [conv.id for conv in conversations]
+            await online_status_service.notify_status_change(actor, "online", conversation_ids)
+
+        # 发送连接成功消息
         await websocket.send_json({
             "type": "connection_established",
             "data": {
@@ -82,40 +126,46 @@ async def websocket_endpoint(
             },
         })
 
-        # 5. 消息循环
+        # 消息循环
         while True:
-            # 接收消息
             data = await websocket.receive_json()
             message_type = data.get("type")
 
             if message_type == "ping":
-                # 心跳响应
                 await connection_manager.update_heartbeat(websocket)
                 await websocket.send_json({
                     "type": "pong",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
 
-            elif message_type == "message":
-                # 消息发送（迭代10实现）
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Message sending not yet implemented",
-                })
+            elif message_type == "ack":
+                # 消息送达确认
+                message_id = data.get("message_id")
+                logger.info(f"Message {message_id} acknowledged by {actor}")
+
+            elif message_type == "typing":
+                # 输入状态推送（暂不实现）
+                logger.debug(f"Typing event from {actor}")
 
             else:
-                # 未知消息类型
                 await websocket.send_json({
                     "type": "error",
                     "message": f"Unknown message type: {message_type}",
                 })
 
     except WebSocketDisconnect:
-        # 客户端断开连接
         logger.info("WebSocket client disconnected")
     except Exception as e:
-        # 异常处理
         logger.error(f"WebSocket error: {e}", exc_info=True)
     finally:
-        # 6. 清理连接
+        # 清理连接
         await connection_manager.disconnect(websocket)
+
+        # 通知离线状态
+        if actor and online_status_service and conversation_repo:
+            try:
+                conversations = await conversation_repo.find_by_actor(actor)
+                conversation_ids = [conv.id for conv in conversations]
+                await online_status_service.notify_status_change(actor, "offline", conversation_ids)
+            except Exception as e:
+                logger.error(f"Failed to notify offline status: {e}")
