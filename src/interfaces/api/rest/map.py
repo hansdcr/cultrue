@@ -8,9 +8,21 @@ from src.application.map.commands.create_agent_location_command import (
     CreateAgentLocationCommand,
     CreateAgentLocationCommandHandler,
 )
+from src.application.map.commands.update_agent_location_command import (
+    UpdateAgentLocationCommand,
+    UpdateAgentLocationCommandHandler,
+)
+from src.application.map.commands.delete_agent_location_command import (
+    DeleteAgentLocationCommand,
+    DeleteAgentLocationCommandHandler,
+)
 from src.application.map.queries.get_nearby_agents_query import (
     GetNearbyAgentsQuery,
     GetNearbyAgentsQueryHandler,
+)
+from src.application.map.queries.get_agent_location_query import (
+    GetAgentLocationQuery,
+    GetAgentLocationQueryHandler,
 )
 from src.application.map.queries.get_agent_locations_query import (
     GetAgentLocationsQuery,
@@ -25,12 +37,14 @@ from src.infrastructure.persistence.repositories.postgres_agent_repository impor
 )
 from src.interfaces.api.schemas.agent_location_schema import (
     CreateAgentLocationRequest,
+    UpdateAgentLocationRequest,
     AgentLocationResponse,
     NearbyAgentsResponse,
     AgentLocationsResponse,
     AgentInfoSchema,
 )
 from src.interfaces.api.schemas.response import ApiResponse
+from src.interfaces.api.dependencies import CurrentAdmin
 
 router = APIRouter(prefix="/map", tags=["map"])
 
@@ -43,6 +57,7 @@ router = APIRouter(prefix="/map", tags=["map"])
 async def create_agent_location(
     request: CreateAgentLocationRequest,
     session: AsyncSession = Depends(get_db_session),
+    admin: CurrentAdmin = None,  # 管理员权限验证
 ):
     """创建Agent位置（管理员权限）。
 
@@ -206,3 +221,138 @@ async def get_agent_locations(
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get(
+    "/agent-locations/{location_id}",
+    response_model=ApiResponse[AgentLocationResponse]
+)
+async def get_agent_location(
+    location_id: str,
+    session: AsyncSession = Depends(get_db_session),
+):
+    """获取Agent位置详情。
+
+    根据位置ID查询位置的详细信息。
+    """
+    agent_repo = PostgresAgentRepository(session)
+    location_repo = PostgresAgentLocationRepository(session, agent_repo)
+    handler = GetAgentLocationQueryHandler(location_repo, agent_repo)
+
+    try:
+        query = GetAgentLocationQuery(location_id=UUID(location_id))
+        result = await handler.handle(query)
+
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location not found: {location_id}"
+            )
+
+        return ApiResponse(
+            code=status.HTTP_200_OK,
+            message="Agent location retrieved successfully",
+            data=AgentLocationResponse(
+                location_id=result.location_id,
+                agent=AgentInfoSchema(
+                    id=result.agent.id,
+                    agent_id=result.agent.agent_id,
+                    name=result.agent.name,
+                    avatar=result.agent.avatar,
+                    description=result.agent.description,
+                ),
+                latitude=result.latitude,
+                longitude=result.longitude,
+                address=result.address,
+                is_active=result.is_active,
+                display_order=result.display_order,
+                distance=result.distance,
+                created_at=result.created_at,
+                updated_at=result.updated_at,
+            ),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.put(
+    "/agent-locations/{location_id}",
+    response_model=ApiResponse[AgentLocationResponse]
+)
+async def update_agent_location(
+    location_id: str,
+    request: UpdateAgentLocationRequest,
+    session: AsyncSession = Depends(get_db_session),
+    admin: CurrentAdmin = None,  # 管理员权限验证
+):
+    """更新Agent位置（管理员权限）。
+
+    更新Agent在地图上的位置信息。
+    """
+    agent_repo = PostgresAgentRepository(session)
+    location_repo = PostgresAgentLocationRepository(session, agent_repo)
+    handler = UpdateAgentLocationCommandHandler(location_repo, agent_repo)
+
+    try:
+        command = UpdateAgentLocationCommand(
+            location_id=UUID(location_id),
+            latitude=request.latitude,
+            longitude=request.longitude,
+            address=request.address,
+            is_active=request.is_active,
+            display_order=request.display_order,
+            metadata=request.metadata,
+        )
+
+        result = await handler.handle(command)
+
+        return ApiResponse(
+            code=status.HTTP_200_OK,
+            message="Agent location updated successfully",
+            data=AgentLocationResponse(
+                location_id=result.location_id,
+                agent=AgentInfoSchema(
+                    id=result.agent.id,
+                    agent_id=result.agent.agent_id,
+                    name=result.agent.name,
+                    avatar=result.agent.avatar,
+                    description=result.agent.description,
+                ),
+                latitude=result.latitude,
+                longitude=result.longitude,
+                address=result.address,
+                is_active=result.is_active,
+                display_order=result.display_order,
+                distance=result.distance,
+                created_at=result.created_at,
+                updated_at=result.updated_at,
+            ),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.delete(
+    "/agent-locations/{location_id}",
+    status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_agent_location(
+    location_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    admin: CurrentAdmin = None,  # 管理员权限验证
+):
+    """删除Agent位置（管理员权限）。
+
+    从地图上删除Agent的位置。
+    """
+    location_repo = PostgresAgentLocationRepository(
+        session, PostgresAgentRepository(session)
+    )
+    handler = DeleteAgentLocationCommandHandler(location_repo)
+
+    try:
+        command = DeleteAgentLocationCommand(location_id=UUID(location_id))
+        await handler.handle(command)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+

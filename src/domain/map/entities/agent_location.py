@@ -1,6 +1,6 @@
 """Agent地理位置实体。"""
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 from uuid import UUID, uuid4
 from math import radians, sin, cos, sqrt, atan2
@@ -66,8 +66,8 @@ class AgentLocation:
             is_active=is_active,
             display_order=display_order,
             metadata=metadata or {},
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc)
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
         )
 
     def distance_to(self, latitude: float, longitude: float) -> float:
@@ -97,12 +97,12 @@ class AgentLocation:
     def activate(self) -> None:
         """激活位置（在地图上显示）。"""
         self.is_active = True
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.utcnow()
 
     def deactivate(self) -> None:
         """停用位置（在地图上隐藏）。"""
         self.is_active = False
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.utcnow()
 
     def update_location(
         self,
@@ -128,4 +128,4 @@ class AgentLocation:
         self.latitude = latitude
         self.longitude = longitude
         self.address = address
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.utcnow()

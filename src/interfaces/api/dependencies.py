@@ -132,8 +132,32 @@ async def get_current_active_user(
     return user
 
 
+async def require_admin(
+    user: Annotated[UserModel, Depends(get_current_active_user)],
+) -> UserModel:
+    """验证当前用户是否为管理员。
+
+    Args:
+        user: 用户模型对象（由get_current_active_user依赖提供）
+
+    Returns:
+        用户模型对象
+
+    Raises:
+        HTTPException: 如果用户不是管理员
+    """
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator permission required",
+        )
+
+    return user
+
+
 # 类型别名，方便在路由中使用
 CurrentActor = Annotated[Actor, Depends(get_current_actor)]
 CurrentUserId = Annotated[str, Depends(get_current_user_id)]
 CurrentUser = Annotated[UserModel, Depends(get_current_user)]
 CurrentActiveUser = Annotated[UserModel, Depends(get_current_active_user)]
+CurrentAdmin = Annotated[UserModel, Depends(require_admin)]

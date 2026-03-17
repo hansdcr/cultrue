@@ -12,7 +12,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
-from geoalchemy2 import Geography
 
 from src.infrastructure.persistence.database import Base
 
@@ -36,10 +35,7 @@ class AgentLocationModel(Base):
     address: Mapped[str] = mapped_column(String(500), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    location: Mapped[str | None] = mapped_column(
-        Geography(geometry_type="POINT", srid=4326), nullable=True
-    )
+    extra_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -57,7 +53,7 @@ class AgentLocationModel(Base):
         Index("idx_agent_locations_agent_id", "agent_id"),
         Index("idx_agent_locations_is_active", "is_active"),
         Index("idx_agent_locations_display_order", "display_order"),
-        Index("idx_agent_locations_location_gist", "location", postgresql_using="gist"),
+        Index("idx_agent_locations_lat_lon", "latitude", "longitude"),
     )
 
     def __repr__(self) -> str:

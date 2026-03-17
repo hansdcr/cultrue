@@ -1,10 +1,10 @@
 """PostgreSQL Agent地理位置仓储实现。"""
 from typing import List, Optional, Tuple
 from uuid import UUID
+from math import radians, sin, cos, sqrt, atan2
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from geoalchemy2.functions import ST_DWithin, ST_Distance, ST_SetSRID, ST_MakePoint
 
 from src.domain.map.entities.agent_location import AgentLocation
 from src.domain.map.repositories.agent_location_repository import AgentLocationRepository
@@ -12,6 +12,29 @@ from src.domain.agent.entities.agent import Agent
 from src.domain.agent.repositories.agent_repository import AgentRepository
 from src.infrastructure.persistence.models.agent_location_model import AgentLocationModel
 from src.infrastructure.persistence.models.agent_model import AgentModel
+
+
+def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """使用Haversine公式计算两点间的距离（米）。
+
+    Args:
+        lat1: 第一个点的纬度
+        lon1: 第一个点的经度
+        lat2: 第二个点的纬度
+        lon2: 第二个点的经度
+
+    Returns:
+        两点间的距离（米）
+    """
+    R = 6371000  # 地球半径（米）
+    phi1, phi2 = radians(lat1), radians(lat2)
+    dphi = radians(lat2 - lat1)
+    dlambda = radians(lon2 - lon1)
+
+    a = sin(dphi/2)**2 + cos(phi1) * cos(phi2) * sin(dlambda/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1-a))
+
+    return R * c
 
 
 class PostgresAgentLocationRepository(AgentLocationRepository):
@@ -59,26 +82,31 @@ class PostgresAgentLocationRepository(AgentLocationRepository):
         limit: int = 10,
         only_active: bool = True
     ) -> List[AgentLocation]:
-        """查找周边位置（使用PostGIS）。"""
-        # 使用PostGIS的ST_DWithin函数进行空间查询
-        point = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)
-
-        stmt = select(AgentLocationModel).where(
-            ST_DWithin(AgentLocationModel.location, point, radius)
-        )
+        """查找周边位置（使用Haversine公式）。"""
+        # 查询所有位置（如果only_active=True，只查询激活的）
+        stmt = select(AgentLocationModel)
 
         if only_active:
             stmt = stmt.where(AgentLocationModel.is_active == True)
 
-        # 按距离排序
-        stmt = stmt.order_by(
-            ST_Distance(AgentLocationModel.location, point)
-        ).limit(limit)
-
         result = await self.session.execute(stmt)
         models = result.scalars().all()
 
-        return [self._to_entity(model) for model in models]
+        # 计算距离并过滤
+        locations_with_distance = []
+        for model in models:
+            distance = haversine_distance(
+                latitude, longitude,
+                float(model.latitude), float(model.longitude)
+            )
+            if distance <= radius:
+                locations_with_distance.append((model, distance))
+
+        # 按距离排序并限制数量
+        locations_with_distance.sort(key=lambda x: x[1])
+        locations_with_distance = locations_with_distance[:limit]
+
+        return [self._to_entity(model) for model, _ in locations_with_distance]
 
     async def find_nearby_with_agents(
         self,
@@ -93,27 +121,31 @@ class PostgresAgentLocationRepository(AgentLocationRepository):
         Returns:
             List[Tuple[AgentLocation, Agent, distance]]
         """
-        # 创建点
-        point = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)
-
         # JOIN查询
         stmt = (
-            select(
-                AgentLocationModel,
-                AgentModel,
-                ST_Distance(AgentLocationModel.location, point).label('distance')
-            )
+            select(AgentLocationModel, AgentModel)
             .join(AgentModel, AgentLocationModel.agent_id == AgentModel.id)
-            .where(ST_DWithin(AgentLocationModel.location, point, radius))
         )
 
         if only_active:
             stmt = stmt.where(AgentLocationModel.is_active == True)
 
-        stmt = stmt.order_by('distance').limit(limit)
-
         result = await self.session.execute(stmt)
         rows = result.all()
+
+        # 计算距离并过滤
+        locations_with_distance = []
+        for location_model, agent_model in rows:
+            distance = haversine_distance(
+                latitude, longitude,
+                float(location_model.latitude), float(location_model.longitude)
+            )
+            if distance <= radius:
+                locations_with_distance.append((location_model, agent_model, distance))
+
+        # 按距离排序并限制数量
+        locations_with_distance.sort(key=lambda x: x[2])
+        locations_with_distance = locations_with_distance[:limit]
 
         return [
             (
@@ -121,7 +153,7 @@ class PostgresAgentLocationRepository(AgentLocationRepository):
                 self.agent_repo._to_entity(agent_model),
                 float(distance)
             )
-            for location_model, agent_model, distance in rows
+            for location_model, agent_model, distance in locations_with_distance
         ]
 
     async def update(self, location: AgentLocation) -> AgentLocation:
@@ -137,7 +169,7 @@ class PostgresAgentLocationRepository(AgentLocationRepository):
         model.address = location.address
         model.is_active = location.is_active
         model.display_order = location.display_order
-        model.metadata = location.metadata
+        model.extra_metadata = location.metadata
         model.updated_at = location.updated_at
 
         await self.session.commit()
@@ -169,7 +201,7 @@ class PostgresAgentLocationRepository(AgentLocationRepository):
             address=model.address,
             is_active=model.is_active,
             display_order=model.display_order,
-            metadata=model.metadata or {},
+            metadata=model.extra_metadata or {},
             created_at=model.created_at,
             updated_at=model.updated_at
         )
@@ -184,7 +216,7 @@ class PostgresAgentLocationRepository(AgentLocationRepository):
             address=entity.address,
             is_active=entity.is_active,
             display_order=entity.display_order,
-            metadata=entity.metadata,
+            extra_metadata=entity.metadata,
             created_at=entity.created_at,
             updated_at=entity.updated_at
         )

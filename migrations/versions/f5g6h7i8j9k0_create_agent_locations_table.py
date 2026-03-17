@@ -21,10 +21,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    # 1. 启用PostGIS扩展
-    op.execute('CREATE EXTENSION IF NOT EXISTS postgis')
+    # 注意：PostGIS扩展需要PostgreSQL 16兼容的版本
+    # 如果使用postgis/postgis:16-3.4镜像，可以取消下面的注释
+    # op.execute('CREATE EXTENSION IF NOT EXISTS postgis')
 
-    # 2. 创建agent_locations表
+    # 1. 创建agent_locations表
     op.create_table(
         'agent_locations',
         sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
@@ -43,35 +44,18 @@ def upgrade() -> None:
         sa.CheckConstraint('longitude >= -180 AND longitude <= 180', name='chk_longitude')
     )
 
-    # 3. 创建普通索引
+    # 2. 创建普通索引
     op.create_index('idx_agent_locations_agent_id', 'agent_locations', ['agent_id'])
     op.create_index('idx_agent_locations_is_active', 'agent_locations', ['is_active'])
     op.create_index('idx_agent_locations_display_order', 'agent_locations', ['display_order'])
+    # 为经纬度创建复合索引，用于加速地理查询
+    op.create_index('idx_agent_locations_lat_lon', 'agent_locations', ['latitude', 'longitude'])
 
-    # 4. 添加地理位置列（PostGIS GEOGRAPHY类型）
+    # 3. 创建触发器：自动更新updated_at字段
     op.execute("""
-        ALTER TABLE agent_locations
-        ADD COLUMN location GEOGRAPHY(POINT, 4326)
-    """)
-
-    # 5. 更新location列（从latitude和longitude生成）
-    op.execute("""
-        UPDATE agent_locations
-        SET location = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)
-    """)
-
-    # 6. 创建空间索引
-    op.execute("""
-        CREATE INDEX idx_agent_locations_location_gist
-        ON agent_locations USING GIST (location)
-    """)
-
-    # 7. 创建触发器：自动更新location列和updated_at字段
-    op.execute("""
-        CREATE OR REPLACE FUNCTION update_agent_location_geography()
+        CREATE OR REPLACE FUNCTION update_agent_location_updated_at()
         RETURNS TRIGGER AS $$
         BEGIN
-            NEW.location = ST_SetSRID(ST_MakePoint(NEW.longitude, NEW.latitude), 4326);
             NEW.updated_at = CURRENT_TIMESTAMP;
             RETURN NEW;
         END;
@@ -79,18 +63,62 @@ def upgrade() -> None:
     """)
 
     op.execute("""
-        CREATE TRIGGER trigger_update_agent_location_geography
-        BEFORE INSERT OR UPDATE OF latitude, longitude ON agent_locations
+        CREATE TRIGGER trigger_update_agent_location_updated_at
+        BEFORE UPDATE ON agent_locations
         FOR EACH ROW
-        EXECUTE FUNCTION update_agent_location_geography();
+        EXECUTE FUNCTION update_agent_location_updated_at();
     """)
+
+    # PostGIS相关代码（需要postgis/postgis镜像）：
+    # 如果将来使用PostGIS，取消下面的注释
+    #
+    # # 4. 添加地理位置列（PostGIS GEOGRAPHY类型）
+    # op.execute("""
+    #     ALTER TABLE agent_locations
+    #     ADD COLUMN location GEOGRAPHY(POINT, 4326)
+    # """)
+    #
+    # # 5. 更新location列（从latitude和longitude生成）
+    # op.execute("""
+    #     UPDATE agent_locations
+    #     SET location = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)
+    # """)
+    #
+    # # 6. 创建空间索引
+    # op.execute("""
+    #     CREATE INDEX idx_agent_locations_location_gist
+    #     ON agent_locations USING GIST (location)
+    # """)
+    #
+    # # 7. 创建触发器：自动更新location列
+    # op.execute("""
+    #     CREATE OR REPLACE FUNCTION update_agent_location_geography()
+    #     RETURNS TRIGGER AS $$
+    #     BEGIN
+    #         NEW.location = ST_SetSRID(ST_MakePoint(NEW.longitude, NEW.latitude), 4326);
+    #         NEW.updated_at = CURRENT_TIMESTAMP;
+    #         RETURN NEW;
+    #     END;
+    #     $$ LANGUAGE plpgsql;
+    # """)
+    #
+    # op.execute("""
+    #     CREATE TRIGGER trigger_update_agent_location_geography
+    #     BEFORE INSERT OR UPDATE OF latitude, longitude ON agent_locations
+    #     FOR EACH ROW
+    #     EXECUTE FUNCTION update_agent_location_geography();
+    # """)
 
 
 def downgrade() -> None:
     """Downgrade schema."""
     # 1. 删除触发器和函数
-    op.execute('DROP TRIGGER IF EXISTS trigger_update_agent_location_geography ON agent_locations')
-    op.execute('DROP FUNCTION IF EXISTS update_agent_location_geography()')
+    op.execute('DROP TRIGGER IF EXISTS trigger_update_agent_location_updated_at ON agent_locations')
+    op.execute('DROP FUNCTION IF EXISTS update_agent_location_updated_at()')
+
+    # 如果使用了PostGIS，还需要删除这些：
+    # op.execute('DROP TRIGGER IF EXISTS trigger_update_agent_location_geography ON agent_locations')
+    # op.execute('DROP FUNCTION IF EXISTS update_agent_location_geography()')
 
     # 2. 删除表（会自动删除索引）
     op.drop_table('agent_locations')

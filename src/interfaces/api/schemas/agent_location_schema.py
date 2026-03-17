@@ -14,6 +14,16 @@ class CreateAgentLocationRequest(BaseModel):
     metadata: Optional[dict] = Field(default=None, description="扩展信息")
 
 
+class UpdateAgentLocationRequest(BaseModel):
+    """更新Agent位置请求。"""
+    latitude: Optional[float] = Field(None, ge=-90, le=90, description="纬度")
+    longitude: Optional[float] = Field(None, ge=-180, le=180, description="经度")
+    address: Optional[str] = Field(None, max_length=500, description="地址")
+    is_active: Optional[bool] = Field(None, description="是否激活")
+    display_order: Optional[int] = Field(None, description="显示优先级")
+    metadata: Optional[dict] = Field(None, description="扩展信息")
+
+
 class AgentInfoSchema(BaseModel):
     """Agent信息Schema（嵌套在响应中）。"""
     id: str
