@@ -31,8 +31,11 @@ from src.interfaces.websocket import endpoints as ws_endpoints
 setup_logging()
 logger = get_logger(__name__)
 
-# 全局WebSocket连接管理器
+# 全局实例
 connection_manager = ConnectionManager()
+event_bus = EventBus()
+message_push_service = None
+online_status_service = None
 cleanup_task = None
 
 
@@ -55,12 +58,38 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     logger.info(f"Database initialized: {settings.database_url}")
 
-    # 初始化WebSocket连接管理器
-    global cleanup_task
-    ws_endpoints.set_connection_manager(connection_manager)
-    cleanup_task = ConnectionCleanupTask(connection_manager)
-    cleanup_task.start()
-    logger.info("WebSocket connection manager initialized")
+    # 初始化WebSocket连接管理器和实时服务
+    global cleanup_task, message_push_service, online_status_service
+
+    # 获取数据库会话和仓储
+    async for session in get_db_session():
+        conversation_repo = PostgresConversationRepository(session)
+
+        # 初始化服务
+        message_push_service = MessagePushService(connection_manager, conversation_repo)
+        online_status_service = OnlineStatusService(connection_manager, message_push_service, conversation_repo)
+
+        # 设置WebSocket端点依赖
+        ws_endpoints.set_connection_manager(connection_manager)
+        ws_endpoints.set_online_status_service(online_status_service)
+        ws_endpoints.set_conversation_repo(conversation_repo)
+
+        # 设置message路由的EventBus
+        message.set_event_bus(event_bus)
+
+        # 注册事件处理器
+        message_sent_handler = MessageSentEventHandler(message_push_service)
+        message_deleted_handler = MessageDeletedEventHandler(message_push_service)
+
+        event_bus.subscribe("message_sent", message_sent_handler.handle)
+        event_bus.subscribe("message_deleted", message_deleted_handler.handle)
+
+        # 启动连接清理任务
+        cleanup_task = ConnectionCleanupTask(connection_manager)
+        cleanup_task.start()
+
+        logger.info("WebSocket and realtime services initialized")
+        break
 
     yield
 

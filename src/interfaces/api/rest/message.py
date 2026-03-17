@@ -21,6 +21,7 @@ from src.application.messaging.queries.list_messages_query import (
     ListMessagesQuery,
     ListMessagesQueryHandler,
 )
+from src.application.shared.events.event_bus import EventBus
 from src.domain.shared.exceptions import DomainException, NotFoundException
 from src.infrastructure.persistence.database import get_db
 from src.infrastructure.persistence.repositories.postgres_conversation_repository import (
@@ -38,6 +39,18 @@ from src.interfaces.api.schemas.message_schema import (
 from src.interfaces.api.schemas.response import ApiResponse
 
 router = APIRouter(prefix="/api", tags=["消息"])
+
+# 全局EventBus实例（由main.py注入）
+_event_bus: EventBus = None
+
+
+def set_event_bus(bus: EventBus) -> None:
+    global _event_bus
+    _event_bus = bus
+
+
+def get_event_bus() -> EventBus:
+    return _event_bus
 
 
 @router.post(
@@ -72,7 +85,7 @@ async def send_message(
         message_repository = PostgresMessageRepository(db)
         conversation_repository = PostgresConversationRepository(db)
         handler = SendMessageCommandHandler(
-            message_repository, conversation_repository
+            message_repository, conversation_repository, _event_bus
         )
 
         # 创建命令
