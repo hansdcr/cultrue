@@ -14,7 +14,7 @@ from src.infrastructure.logging import get_logger, setup_logging
 from src.infrastructure.persistence.database import close_database, init_database
 from src.infrastructure.security.unified_auth_middleware import UnifiedAuthMiddleware
 from src.interfaces.api.exception_handlers import register_exception_handlers
-from src.interfaces.api.rest import agent, auth, contact, user, conversation, message
+from src.interfaces.api.rest import agent, auth, contact, user, conversation, message, map
 from src.interfaces.api.schemas.response import ApiResponse
 from src.application.realtime.services.connection_manager import ConnectionManager
 from src.application.realtime.services.message_push_service import MessagePushService
@@ -137,6 +137,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(contact.router, prefix="/api")
     app.include_router(conversation.router)
     app.include_router(message.router)
+    app.include_router(map.router, prefix="/api")
     app.include_router(ws_endpoints.router, tags=["websocket"])
 
 
