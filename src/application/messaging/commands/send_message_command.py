@@ -4,8 +4,10 @@ from typing import Optional
 from uuid import UUID
 
 from src.application.messaging.dtos.message_dto import MessageDTO
+from src.application.shared.events.event_bus import EventBus
 from src.domain.messaging.entities.message import Message
 from src.domain.messaging.enums.message_type import MessageType
+from src.domain.messaging.events.message_event import MessageEvent
 from src.domain.messaging.repositories.conversation_repository import ConversationRepository
 from src.domain.messaging.repositories.message_repository import MessageRepository
 from src.domain.messaging.value_objects.conversation_id import ConversationId
@@ -29,10 +31,12 @@ class SendMessageCommandHandler:
     def __init__(
         self,
         message_repository: MessageRepository,
-        conversation_repository: ConversationRepository
+        conversation_repository: ConversationRepository,
+        event_bus: EventBus = None  # 可选，用于发布事件
     ):
         self.message_repository = message_repository
         self.conversation_repository = conversation_repository
+        self.event_bus = event_bus
 
     async def handle(self, command: SendMessageCommand) -> MessageDTO:
         """处理发送消息命令。
@@ -71,6 +75,11 @@ class SendMessageCommandHandler:
 
         # 保存消息
         saved_message = await self.message_repository.save(message)
+
+        # 发布事件（异步推送）
+        if self.event_bus:
+            event = MessageEvent.from_message(saved_message, "message_sent")
+            await self.event_bus.publish(event)
 
         return MessageDTO.from_entity(saved_message)
 
