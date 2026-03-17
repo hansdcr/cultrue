@@ -44,7 +44,7 @@ class PostgresMessageRepository(MessageRepository):
             sender_id=sender_participant.id,
             message_type=message.message_type.value,
             content=message.content,
-            metadata=message.metadata,
+            message_metadata=message.metadata,
             created_at=message.created_at
         )
         self.session.add(model)
@@ -156,6 +156,6 @@ class PostgresMessageRepository(MessageRepository):
             sender=sender,
             message_type=MessageType(model.message_type),
             content=model.content,
-            metadata=model.metadata,
+            metadata=model.message_metadata,
             created_at=model.created_at
         )
