@@ -5,6 +5,9 @@
 
 from .agent_model import AgentModel
 from .contact_model import ContactModel
+from .conversation_member_model import ConversationMemberModel
+from .conversation_model import ConversationModel
+from .message_model import MessageModel
 from .participant_model import ParticipantModel
 from .session_model import SessionModel
 from .user_agent_model import UserAgentModel
@@ -17,4 +20,7 @@ __all__ = [
     "ContactModel",
     "SessionModel",
     "UserAgentModel",
+    "ConversationModel",
+    "ConversationMemberModel",
+    "MessageModel",
 ]
