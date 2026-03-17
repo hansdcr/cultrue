@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.interfaces.api.schemas.conversation_schema import ActorSchema
 
@@ -24,8 +24,7 @@ class MessageResponse(BaseModel):
     metadata: Optional[dict] = Field(None, description="元数据")
     created_at: datetime = Field(..., description="创建时间")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MessageListResponse(BaseModel):
