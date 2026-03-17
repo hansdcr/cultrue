@@ -51,3 +51,81 @@ class AgentLocation:
         Raises:
             ValueError: 经纬度不合法
         """
+        # 验证经纬度合法性
+        if not (-90 <= latitude <= 90):
+            raise ValueError("Latitude must be between -90 and 90")
+        if not (-180 <= longitude <= 180):
+            raise ValueError("Longitude must be between -180 and 180")
+
+        return cls(
+            id=uuid4(),
+            agent_id=agent_id,
+            latitude=latitude,
+            longitude=longitude,
+            address=address,
+            is_active=is_active,
+            display_order=display_order,
+            metadata=metadata or {},
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc)
+        )
+
+    def distance_to(self, latitude: float, longitude: float) -> float:
+        """计算到指定坐标的距离（米）。
+
+        使用Haversine公式计算两点间的距离。
+
+        Args:
+            latitude: 目标纬度
+            longitude: 目标经度
+
+        Returns:
+            距离（米）
+        """
+        R = 6371000  # 地球半径（米）
+        lat1, lon1 = radians(self.latitude), radians(self.longitude)
+        lat2, lon2 = radians(latitude), radians(longitude)
+
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+
+        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+        c = 2 * atan2(sqrt(a), sqrt(1-a))
+
+        return R * c
+
+    def activate(self) -> None:
+        """激活位置（在地图上显示）。"""
+        self.is_active = True
+        self.updated_at = datetime.now(timezone.utc)
+
+    def deactivate(self) -> None:
+        """停用位置（在地图上隐藏）。"""
+        self.is_active = False
+        self.updated_at = datetime.now(timezone.utc)
+
+    def update_location(
+        self,
+        latitude: float,
+        longitude: float,
+        address: str
+    ) -> None:
+        """更新位置信息。
+
+        Args:
+            latitude: 新纬度
+            longitude: 新经度
+            address: 新地址
+
+        Raises:
+            ValueError: 经纬度不合法
+        """
+        if not (-90 <= latitude <= 90):
+            raise ValueError("Latitude must be between -90 and 90")
+        if not (-180 <= longitude <= 180):
+            raise ValueError("Longitude must be between -180 and 180")
+
+        self.latitude = latitude
+        self.longitude = longitude
+        self.address = address
+        self.updated_at = datetime.now(timezone.utc)
