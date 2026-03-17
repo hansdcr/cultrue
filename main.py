@@ -16,10 +16,17 @@ from src.infrastructure.security.unified_auth_middleware import UnifiedAuthMiddl
 from src.interfaces.api.exception_handlers import register_exception_handlers
 from src.interfaces.api.rest import agent, auth, contact, user, conversation, message
 from src.interfaces.api.schemas.response import ApiResponse
+from src.application.realtime.services.connection_manager import ConnectionManager
+from src.application.realtime.tasks.connection_cleanup import ConnectionCleanupTask
+from src.interfaces.websocket import endpoints as ws_endpoints
 
 # 配置日志
 setup_logging()
 logger = get_logger(__name__)
+
+# 全局WebSocket连接管理器
+connection_manager = ConnectionManager()
+cleanup_task = None
 
 
 @asynccontextmanager
@@ -41,12 +48,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     logger.info(f"Database initialized: {settings.database_url}")
 
+    # 初始化WebSocket连接管理器
+    global cleanup_task
+    ws_endpoints.set_connection_manager(connection_manager)
+    cleanup_task = ConnectionCleanupTask(connection_manager)
+    cleanup_task.start()
+    logger.info("WebSocket connection manager initialized")
+
     yield
 
     # 关闭时清理资源
     logger.info("Closing database connection...")
     await close_database()
     logger.info("Database connection closed")
+
+    # 停止WebSocket清理任务
+    if cleanup_task:
+        cleanup_task.stop()
+    logger.info("WebSocket connection manager shutdown")
 
 
 def configure_middlewares(app: FastAPI) -> None:
@@ -80,6 +99,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(contact.router, prefix="/api")
     app.include_router(conversation.router)
     app.include_router(message.router)
+    app.include_router(ws_endpoints.router, tags=["websocket"])
 
 
 def create_application() -> FastAPI:
