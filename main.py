@@ -24,6 +24,7 @@ from src.application.realtime.handlers.message_sent_handler import MessageSentEv
 from src.application.realtime.handlers.message_deleted_handler import MessageDeletedEventHandler
 from src.application.shared.events.event_bus import EventBus
 from src.infrastructure.persistence.repositories.postgres_conversation_repository import PostgresConversationRepository
+from src.infrastructure.persistence.repositories.postgres_participant_repository import PostgresParticipantRepository
 from src.infrastructure.persistence.database import get_db_session
 from src.interfaces.websocket import endpoints as ws_endpoints
 
@@ -63,7 +64,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # 获取数据库会话和仓储
     async for session in get_db_session():
-        conversation_repo = PostgresConversationRepository(session)
+        participant_repo = PostgresParticipantRepository(session)
+        conversation_repo = PostgresConversationRepository(session, participant_repo)
 
         # 初始化服务
         message_push_service = MessagePushService(connection_manager, conversation_repo)
