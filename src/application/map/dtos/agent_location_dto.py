@@ -26,9 +26,9 @@ class AgentLocationDTO:
     address: str
     is_active: bool
     display_order: int
-    distance: Optional[float] = None  # 距离（米），仅在nearby查询时返回
     created_at: str
     updated_at: str
+    distance: Optional[float] = None  # 距离（米），仅在nearby查询时返回
 
     @classmethod
     def from_entity(
@@ -61,7 +61,7 @@ class AgentLocationDTO:
             address=location.address,
             is_active=location.is_active,
             display_order=location.display_order,
-            distance=distance,
             created_at=location.created_at.isoformat(),
-            updated_at=location.updated_at.isoformat()
+            updated_at=location.updated_at.isoformat(),
+            distance=distance
         )
