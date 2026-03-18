@@ -67,3 +67,33 @@ class LoginResponse(BaseModel):
     access_token: str = Field(..., description="访问令牌")
     refresh_token: str = Field(..., description="刷新令牌")
     token_type: str = Field(default="bearer", description="令牌类型")
+
+
+class AgentLoginRequest(BaseModel):
+    """Agent登录请求。"""
+
+    agent_id: str = Field(..., description="Agent ID（如 agent_libai）")
+    api_key: str = Field(..., description="API Key")
+
+
+class AgentResponse(BaseModel):
+    """Agent响应（登录用）。"""
+
+    id: str = Field(..., description="Agent UUID")
+    agent_id: str = Field(..., description="Agent ID")
+    name: str = Field(..., description="Agent名称")
+    avatar: Optional[str] = Field(None, description="头像")
+    description: Optional[str] = Field(None, description="描述")
+    is_active: bool = Field(..., description="是否激活")
+
+    class Config:
+        from_attributes = True
+
+
+class AgentLoginResponse(BaseModel):
+    """Agent登录响应。"""
+
+    agent: AgentResponse = Field(..., description="Agent信息")
+    access_token: str = Field(..., description="访问令牌")
+    refresh_token: str = Field(..., description="刷新令牌")
+    token_type: str = Field(default="bearer", description="令牌类型")

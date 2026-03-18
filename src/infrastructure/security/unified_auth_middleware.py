@@ -39,6 +39,7 @@ class UnifiedAuthMiddleware(BaseHTTPMiddleware):
         "/openapi.json",
         "/api/auth/register",
         "/api/auth/login",
+        "/api/auth/agent-login",
         "/api/auth/refresh",
         "/api/agents/register",  # Agent自主注册
         "/health",

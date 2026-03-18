@@ -16,10 +16,17 @@ from src.application.user.commands.register_user_command import (
     RegisterUserCommand,
     RegisterUserCommandHandler,
 )
+from src.application.agent.commands.agent_login_command import (
+    AgentLoginCommand,
+    AgentLoginCommandHandler,
+)
 from src.domain.shared.exceptions import DomainException
 from src.infrastructure.persistence.database import get_db
 from src.infrastructure.persistence.repositories.postgres_user_repository import (
     PostgresUserRepository,
+)
+from src.infrastructure.persistence.repositories.postgres_agent_repository import (
+    PostgresAgentRepository,
 )
 from src.infrastructure.security.jwt_service import (
     JWTExpiredError,
@@ -27,6 +34,9 @@ from src.infrastructure.security.jwt_service import (
     jwt_service,
 )
 from src.interfaces.api.schemas.auth_schema import (
+    AgentLoginRequest,
+    AgentLoginResponse,
+    AgentResponse,
     LoginRequest,
     LoginResponse,
     RefreshTokenRequest,
@@ -242,3 +252,52 @@ async def logout() -> ApiResponse[None]:
         data=None,
         message="Logout successful. Please delete your local tokens.",
     )
+
+
+@router.post(
+    "/agent-login",
+    response_model=ApiResponse[AgentLoginResponse],
+    summary="Agent登录",
+    description="Agent通过 agent_id + api_key 登录，获取JWT Token",
+)
+async def agent_login(
+    request: AgentLoginRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ApiResponse[AgentLoginResponse]:
+    """Agent登录。"""
+    try:
+        agent_repository = PostgresAgentRepository(db)
+        handler = AgentLoginCommandHandler(agent_repository)
+        command = AgentLoginCommand(
+            agent_id=request.agent_id,
+            api_key=request.api_key,
+        )
+        result = await handler.handle(command)
+
+        return ApiResponse.success(
+            data=AgentLoginResponse(
+                agent=AgentResponse(
+                    id=result.agent.id,
+                    agent_id=result.agent.agent_id,
+                    name=result.agent.name,
+                    avatar=result.agent.avatar,
+                    description=result.agent.description,
+                    is_active=result.agent.is_active,
+                ),
+                access_token=result.access_token,
+                refresh_token=result.refresh_token,
+                token_type=result.token_type,
+            ),
+            message="Agent login successful",
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e),
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        )
