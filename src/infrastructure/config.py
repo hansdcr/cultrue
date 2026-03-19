@@ -72,21 +72,19 @@ class Settings(BaseSettings):
 
     # CORS
     cors_origins: str = Field(
-        default="http://localhost:3000,http://localhost:5173",
-        description="允许的CORS源（逗号分隔）",
+        default="*",
+        description="允许的CORS源（逗号分隔，* 表示全部）",
     )
-    cors_allow_credentials: bool = Field(default=True, description="允许CORS凭证")
+    cors_allow_credentials: bool = Field(default=False, description="允许CORS凭证")
 
     # Logging
     log_level: str = Field(default="INFO", description="日志级别")
     log_format: str = Field(default="json", description="日志格式")
 
     def get_cors_origins_list(self) -> list[str]:
-        """获取CORS源列表。
-
-        Returns:
-            CORS源列表
-        """
+        """获取CORS源列表。"""
+        if self.cors_origins.strip() == "*":
+            return ["*"]
         return [origin.strip() for origin in self.cors_origins.split(",")]
 
 
