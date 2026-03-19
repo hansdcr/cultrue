@@ -16,14 +16,21 @@ from src.application.user.queries.get_user_query import (
     GetUserQuery,
     GetUserQueryHandler,
 )
+from src.domain.user.value_objects.email import Email
 from src.infrastructure.persistence.database import get_db
+from src.infrastructure.persistence.repositories.postgres_agent_repository import (
+    PostgresAgentRepository,
+)
 from src.infrastructure.persistence.repositories.postgres_user_repository import (
     PostgresUserRepository,
 )
 from src.interfaces.api.dependencies import CurrentActiveUser
 from src.interfaces.api.schemas.response import ApiResponse
-from src.interfaces.api.schemas.user_schema import UpdateUserRequest, UserResponse
-from src.domain.user.value_objects.email import Email
+from src.interfaces.api.schemas.user_schema import (
+    SearchResultItem,
+    UpdateUserRequest,
+    UserResponse,
+)
 
 router = APIRouter(prefix="/api/users", tags=["用户"])
 
@@ -141,59 +148,59 @@ async def update_current_user(
 
 @router.get(
     "/search",
-    response_model=ApiResponse[List[UserResponse]],
-    summary="搜索用户",
-    description="根据用户名或邮箱搜索用户",
+    response_model=ApiResponse[List[SearchResultItem]],
+    summary="统一搜索",
+    description="按关键词同时搜索用户（用户名/邮箱精确匹配）和 Agent（名称模糊匹配）",
 )
-async def search_users(
+async def search_actors(
     q: str = Query(..., min_length=1),
     db: Annotated[AsyncSession, Depends(get_db)] = None,
-) -> ApiResponse[List[UserResponse]]:
-    """搜索用户（按用户名或邮箱精确匹配）。"""
-    user_repository = PostgresUserRepository(db)
-    results = []
+) -> ApiResponse[List[SearchResultItem]]:
+    """统一搜索用户和 Agent。"""
+    results: List[SearchResultItem] = []
 
-    # 先按用户名查找
-    user = await user_repository.find_by_username(q)
+    user_repo = PostgresUserRepository(db)
+    agent_repo = PostgresAgentRepository(db)
+
+    # 搜索用户：按用户名精确匹配
+    user = await user_repo.find_by_username(q)
     if user:
-        results.append(UserResponse(
-            id=str(user.id.value),
-            username=user.username,
-            email=str(user.email),
-            full_name=user.full_name,
-            avatar_url=user.avatar_url,
-            bio=user.bio,
-            wallet_balance=user.wallet_balance,
-            is_active=user.is_active,
-            is_verified=user.is_verified,
-            created_at=user.created_at,
-            updated_at=user.updated_at,
-            last_login_at=user.last_login_at,
+        results.append(SearchResultItem(
+            actor_type="user",
+            actor_id=str(user.id.value),
+            name=user.username,
+            avatar=user.avatar_url,
+            description=str(user.email),
         ))
 
-    # 再按邮箱查找（避免重复）
+    # 搜索用户：按邮箱精确匹配（避免重复）
     if not results:
         try:
-            user_by_email = await user_repository.find_by_email(Email(value=q))
+            user_by_email = await user_repo.find_by_email(Email(value=q))
             if user_by_email:
-                results.append(UserResponse(
-                    id=str(user_by_email.id.value),
-                    username=user_by_email.username,
-                    email=str(user_by_email.email),
-                    full_name=user_by_email.full_name,
-                    avatar_url=user_by_email.avatar_url,
-                    bio=user_by_email.bio,
-                    wallet_balance=user_by_email.wallet_balance,
-                    is_active=user_by_email.is_active,
-                    is_verified=user_by_email.is_verified,
-                    created_at=user_by_email.created_at,
-                    updated_at=user_by_email.updated_at,
-                    last_login_at=user_by_email.last_login_at,
+                results.append(SearchResultItem(
+                    actor_type="user",
+                    actor_id=str(user_by_email.id.value),
+                    name=user_by_email.username,
+                    avatar=user_by_email.avatar_url,
+                    description=str(user_by_email.email),
                 ))
         except Exception:
             pass
 
-    return ApiResponse.success(data=results, message="Users found")
+    # 搜索 Agent：按名称模糊匹配
+    agents = await agent_repo.find_all(name=q, limit=20)
+    for a in agents:
+        results.append(SearchResultItem(
+            actor_type="agent",
+            actor_id=str(a.id),
+            name=a.name,
+            avatar=a.avatar,
+            description=a.description,
+            agent_id=a.agent_id.value,
+        ))
+
+    return ApiResponse.success(data=results, message="Search completed")
 
 
 @router.get(

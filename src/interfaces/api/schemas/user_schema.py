@@ -1,8 +1,3 @@
-"""用户相关的Pydantic schemas。
-
-定义用户API的请求和响应模型。
-"""
-
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
@@ -36,3 +31,14 @@ class UserResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class SearchResultItem(BaseModel):
+    """统一搜索结果条目（user 或 agent）。"""
+
+    actor_type: str = Field(..., description="类型: 'user' | 'agent'")
+    actor_id: str = Field(..., description="UUID")
+    name: str = Field(..., description="显示名称")
+    avatar: Optional[str] = Field(None, description="头像")
+    description: Optional[str] = Field(None, description="简介/邮箱")
+    agent_id: Optional[str] = Field(None, description="agent 字符串 ID，仅 agent 类型有值")

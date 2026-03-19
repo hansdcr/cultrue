@@ -2,7 +2,7 @@
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domain.agent.entities.agent import Agent
@@ -60,7 +60,12 @@ class PostgresAgentRepository(AgentRepository):
         if is_active is not None:
             stmt = stmt.where(AgentModel.is_active == is_active)
         if name:
-            stmt = stmt.where(AgentModel.name.ilike(f'%{name}%'))
+            stmt = stmt.where(
+                or_(
+                    AgentModel.name.ilike(f'%{name}%'),
+                    AgentModel.agent_id.ilike(f'%{name}%'),
+                )
+            )
 
         stmt = stmt.limit(limit).offset(offset).order_by(AgentModel.created_at.desc())
 
@@ -103,7 +108,12 @@ class PostgresAgentRepository(AgentRepository):
         if is_active is not None:
             stmt = stmt.where(AgentModel.is_active == is_active)
         if name:
-            stmt = stmt.where(AgentModel.name.ilike(f'%{name}%'))
+            stmt = stmt.where(
+                or_(
+                    AgentModel.name.ilike(f'%{name}%'),
+                    AgentModel.agent_id.ilike(f'%{name}%'),
+                )
+            )
 
         result = await self.session.execute(stmt)
         return result.scalar_one()
