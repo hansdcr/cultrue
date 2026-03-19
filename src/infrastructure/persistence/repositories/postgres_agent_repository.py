@@ -62,8 +62,8 @@ class PostgresAgentRepository(AgentRepository):
         if name:
             stmt = stmt.where(
                 or_(
-                    AgentModel.name.ilike(f'%{name}%'),
-                    AgentModel.agent_id.ilike(f'%{name}%'),
+                    AgentModel.name == name,
+                    AgentModel.agent_id == name,
                 )
             )
 
@@ -110,8 +110,8 @@ class PostgresAgentRepository(AgentRepository):
         if name:
             stmt = stmt.where(
                 or_(
-                    AgentModel.name.ilike(f'%{name}%'),
-                    AgentModel.agent_id.ilike(f'%{name}%'),
+                    AgentModel.name == name,
+                    AgentModel.agent_id == name,
                 )
             )
 
