@@ -132,6 +132,7 @@ async def create_agent(
 @router.get("", response_model=ApiResponse[ListAgentsResponse])
 async def list_agents(
     is_active: Optional[bool] = Query(default=None),
+    name: Optional[str] = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_db_session),
@@ -142,6 +143,7 @@ async def list_agents(
 
     query = ListAgentsQuery(
         is_active=is_active,
+        name=name,
         limit=limit,
         offset=offset,
     )

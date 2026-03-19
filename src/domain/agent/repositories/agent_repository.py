@@ -64,6 +64,7 @@ class AgentRepository(ABC):
     async def find_all(
         self,
         is_active: Optional[bool] = None,
+        name: Optional[str] = None,
         limit: int = 20,
         offset: int = 0
     ) -> List[Agent]:
@@ -101,7 +102,7 @@ class AgentRepository(ABC):
         pass
 
     @abstractmethod
-    async def count(self, is_active: Optional[bool] = None) -> int:
+    async def count(self, is_active: Optional[bool] = None, name: Optional[str] = None) -> int:
         """统计Agent数量。
 
         Args:

@@ -50,6 +50,7 @@ class PostgresAgentRepository(AgentRepository):
     async def find_all(
         self,
         is_active: Optional[bool] = None,
+        name: Optional[str] = None,
         limit: int = 20,
         offset: int = 0
     ) -> List[Agent]:
@@ -58,6 +59,8 @@ class PostgresAgentRepository(AgentRepository):
 
         if is_active is not None:
             stmt = stmt.where(AgentModel.is_active == is_active)
+        if name:
+            stmt = stmt.where(AgentModel.name.ilike(f'%{name}%'))
 
         stmt = stmt.limit(limit).offset(offset).order_by(AgentModel.created_at.desc())
 
@@ -93,12 +96,14 @@ class PostgresAgentRepository(AgentRepository):
             await self.session.delete(model)
             await self.session.flush()
 
-    async def count(self, is_active: Optional[bool] = None) -> int:
+    async def count(self, is_active: Optional[bool] = None, name: Optional[str] = None) -> int:
         """统计Agent数量。"""
         stmt = select(func.count(AgentModel.id))
 
         if is_active is not None:
             stmt = stmt.where(AgentModel.is_active == is_active)
+        if name:
+            stmt = stmt.where(AgentModel.name.ilike(f'%{name}%'))
 
         result = await self.session.execute(stmt)
         return result.scalar_one()

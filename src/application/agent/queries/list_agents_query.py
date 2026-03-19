@@ -10,6 +10,7 @@ from src.domain.agent.repositories.agent_repository import AgentRepository
 class ListAgentsQuery:
     """获取Agent列表查询。"""
     is_active: Optional[bool] = None
+    name: Optional[str] = None
     limit: int = 20
     offset: int = 0
 
@@ -41,12 +42,13 @@ class ListAgentsQueryHandler:
         # 查询Agent列表
         agents = await self.agent_repository.find_all(
             is_active=query.is_active,
+            name=query.name,
             limit=query.limit,
             offset=query.offset,
         )
 
         # 统计总数
-        total = await self.agent_repository.count(is_active=query.is_active)
+        total = await self.agent_repository.count(is_active=query.is_active, name=query.name)
 
         # 转换为DTO
         items = [AgentDTO.from_entity(agent) for agent in agents]
